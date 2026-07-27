@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minesweeper-rl"
+version = "0.1.0"
+description = "Hybrid logic + reinforcement learning agent for expert Minesweeper."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "torch",
+    "pyyaml",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "matplotlib"]
+
+[project.scripts]
+minesweeper-rl = "minesweeper_rl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
