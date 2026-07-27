@@ -17,6 +17,7 @@ import win32api
 import win32con
 import win32gui
 import win32process
+import win32ui
 
 try:
     from mss import MSS
@@ -42,6 +43,9 @@ STOP_FILE = ROOT / "artifacts" / "windows_agent" / "STOP"
 HOTKEY_ID = 9919
 HOTKEY_MODIFIERS = win32con.MOD_CONTROL | win32con.MOD_ALT | 0x4000
 HOTKEY_VK = ord("Q")
+PW_CLIENTONLY = 0x00000001
+PW_RENDERFULLCONTENT = 0x00000002
+MAX_REPAIRED_IMPOSSIBLE_NUMBERS = 8
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,7 @@ class ScreenBoard:
     grid: Grid
     screenshot: Image.Image | None
     step_count: int = 0
+    read_repairs: int = 0
 
     rows: int = ROWS
     cols: int = COLS
@@ -138,8 +143,8 @@ class WindowsMinesweeper:
         self.click_pause = click_pause
         self.cursor_settle = cursor_settle
         self._mss = None
-        if capture_backend not in {"auto", "pil", "mss"}:
-            raise ValueError("capture_backend must be one of: auto, pil, mss")
+        if capture_backend not in {"auto", "pil", "mss", "window"}:
+            raise ValueError("capture_backend must be one of: auto, pil, mss, window")
         if capture_backend in {"auto", "mss"} and MSS is not None:
             try:
                 self._mss = MSS()
@@ -170,6 +175,9 @@ class WindowsMinesweeper:
                 win32gui.ShowWindow(self.hwnd, win32con.SW_RESTORE)
             else:
                 win32gui.ShowWindow(self.hwnd, win32con.SW_SHOW)
+            flags = win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            win32gui.SetWindowPos(self.hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, flags)
+            win32gui.SetWindowPos(self.hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, flags)
             win32gui.BringWindowToTop(self.hwnd)
             win32gui.SetForegroundWindow(self.hwnd)
         except Exception:
@@ -184,12 +192,48 @@ class WindowsMinesweeper:
     def ensure_foreground(self) -> bool:
         if win32gui.GetForegroundWindow() == self.hwnd:
             return True
-        return self.focus()
+        return self.focus(timeout=0.75)
 
     def capture(self) -> Image.Image:
-        self.ensure_foreground()
-        time.sleep(self.capture_delay)
-        return ImageGrab.grab().convert("RGB")
+        array, _, _ = self.capture_client_array()
+        return Image.fromarray(array, mode="RGB")
+
+    def _capture_client_window_array(self) -> np.ndarray:
+        _, _, width, height = win32gui.GetClientRect(self.hwnd)
+        if width <= 0 or height <= 0:
+            raise RuntimeError("Minesweeper window has an empty client area")
+
+        hwnd_dc = win32gui.GetWindowDC(self.hwnd)
+        source_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        memory_dc = source_dc.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(source_dc, width, height)
+        old_object = memory_dc.SelectObject(bitmap)
+
+        try:
+            hdc = memory_dc.GetSafeHdc()
+            rendered = ctypes.windll.user32.PrintWindow(
+                self.hwnd,
+                hdc,
+                PW_CLIENTONLY | PW_RENDERFULLCONTENT,
+            )
+            if not rendered:
+                rendered = ctypes.windll.user32.PrintWindow(self.hwnd, hdc, PW_CLIENTONLY)
+            if not rendered:
+                raise RuntimeError("PrintWindow could not render the Minesweeper client area")
+
+            bits = bitmap.GetBitmapBits(True)
+            array = np.frombuffer(bits, dtype=np.uint8).reshape((height, width, 4))
+            return array[:, :, [2, 1, 0]].copy()
+        finally:
+            try:
+                memory_dc.SelectObject(old_object)
+            except Exception:
+                pass
+            win32gui.DeleteObject(bitmap.GetHandle())
+            memory_dc.DeleteDC()
+            source_dc.DeleteDC()
+            win32gui.ReleaseDC(self.hwnd, hwnd_dc)
 
     def capture_region_array(self, left: int, top: int, right: int, bottom: int) -> np.ndarray:
         width = max(1, right - left)
@@ -200,9 +244,16 @@ class WindowsMinesweeper:
         return np.asarray(ImageGrab.grab(bbox=(left, top, right, bottom)).convert("RGB"))
 
     def capture_client_array(self) -> tuple[np.ndarray, int, int]:
-        self.ensure_foreground()
         time.sleep(self.capture_delay)
         left, top, right, bottom = self.client_bounds()
+        if self.capture_backend in {"auto", "window"}:
+            try:
+                return self._capture_client_window_array(), left, top
+            except Exception:
+                if self.capture_backend == "window":
+                    raise
+        if not self.ensure_foreground():
+            raise RuntimeError("Minesweeper window is not foreground; refusing to read covered screen pixels")
         return self.capture_region_array(left, top, right, bottom), left, top
 
     def capture_client_grid(self) -> tuple[np.ndarray, Grid, Grid]:
@@ -217,13 +268,16 @@ class WindowsMinesweeper:
         return Image.fromarray(array, mode="RGB"), local_grid
 
     def capture_board_array(self, grid: Grid) -> tuple[np.ndarray, Grid]:
-        self.ensure_foreground()
-        time.sleep(self.capture_delay)
-        left = max(0, grid.x_lines[0])
-        top = max(0, grid.y_lines[0])
-        right = grid.x_lines[-1] + 1
-        bottom = grid.y_lines[-1] + 1
-        array = self.capture_region_array(left, top, right, bottom)
+        client_array, client_left, client_top = self.capture_client_array()
+        board_left = max(0, grid.x_lines[0] - client_left)
+        board_top = max(0, grid.y_lines[0] - client_top)
+        board_right = min(client_array.shape[1], grid.x_lines[-1] - client_left + 1)
+        board_bottom = min(client_array.shape[0], grid.y_lines[-1] - client_top + 1)
+        if board_right <= board_left or board_bottom <= board_top:
+            raise RuntimeError("detected grid lies outside the Minesweeper client area")
+        array = client_array[board_top:board_bottom, board_left:board_right].copy()
+        left = client_left + board_left
+        top = client_top + board_top
         local_grid = Grid(
             x_lines=[x - left for x in grid.x_lines],
             y_lines=[y - top for y in grid.y_lines],
@@ -231,8 +285,13 @@ class WindowsMinesweeper:
         return array, local_grid
 
     def client_bounds(self) -> tuple[int, int, int, int]:
+        _, _, width, height = win32gui.GetClientRect(self.hwnd)
+        if width <= 0 or height <= 0:
+            self.focus(timeout=1.0)
         left, top = win32gui.ClientToScreen(self.hwnd, (0, 0))
         _, _, width, height = win32gui.GetClientRect(self.hwnd)
+        if width <= 0 or height <= 0:
+            raise RuntimeError("Minesweeper window has an empty client area; restore the game window first")
         return left, top, left + width, top + height
 
     def detect_grid_from_screenshot(self, screenshot: Image.Image) -> Grid:
@@ -274,6 +333,8 @@ class WindowsMinesweeper:
                     revealed[row, col] = True
                     adjacent[row, col] = int(cell["number"])
 
+        repairs = repair_impossible_numbers(revealed, adjacent, mine_like)
+
         return ScreenBoard(
             revealed=revealed,
             flagged=flagged,
@@ -282,6 +343,7 @@ class WindowsMinesweeper:
             grid=read_grid,
             screenshot=screenshot,
             step_count=step_count,
+            read_repairs=repairs,
         )
 
     def _read_board_fast(self, step_count: int = 0, keep_screenshot: bool = True) -> ScreenBoard:
@@ -320,6 +382,8 @@ class WindowsMinesweeper:
                     revealed[row, col] = True
                     adjacent[row, col] = int(cell["number"])
 
+        repairs = repair_impossible_numbers(revealed, adjacent, mine_like)
+
         return ScreenBoard(
             revealed=revealed,
             flagged=flagged,
@@ -328,6 +392,7 @@ class WindowsMinesweeper:
             grid=grid,
             screenshot=screenshot,
             step_count=step_count,
+            read_repairs=repairs,
         )
 
     def _full_monitor(self) -> dict[str, int]:
@@ -343,7 +408,8 @@ class WindowsMinesweeper:
         if self.grid is None:
             _, _, self.grid = self.capture_client_grid()
         x, y = self.grid.center(action.row, action.col)
-        self.ensure_foreground()
+        if not self.ensure_foreground():
+            raise RuntimeError("Minesweeper window is not foreground; refusing to click")
         win32api.SetCursorPos((x, y))
         time.sleep(max(0.0, self.cursor_settle))
         click_mouse(
@@ -357,7 +423,8 @@ class WindowsMinesweeper:
     def new_game(self, option: str = "new") -> None:
         if option not in {"new", "restart", "continue"}:
             raise ValueError("option must be one of: new, restart, continue")
-        self.focus()
+        if not self.focus(timeout=1.0):
+            raise RuntimeError("could not focus Minesweeper before starting a new game")
         win32api.keybd_event(win32con.VK_F2, 0, 0, 0)
         time.sleep(0.03)
         win32api.keybd_event(win32con.VK_F2, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -684,6 +751,39 @@ def classify_number(array: np.ndarray) -> int:
     return min(distances, key=distances.get)
 
 
+def max_neighbor_count(row: int, col: int, rows: int = ROWS, cols: int = COLS) -> int:
+    return (1 + min(row, 1) + min(rows - 1 - row, 1)) * (1 + min(col, 1) + min(cols - 1 - col, 1)) - 1
+
+
+def repair_impossible_numbers(
+    revealed: np.ndarray,
+    adjacent: np.ndarray,
+    mine_like: np.ndarray,
+    max_repairs: int = MAX_REPAIRED_IMPOSSIBLE_NUMBERS,
+) -> int:
+    impossible: list[tuple[int, int, int, int]] = []
+    for row in range(revealed.shape[0]):
+        for col in range(revealed.shape[1]):
+            if not revealed[row, col] or mine_like[row, col]:
+                continue
+            value = int(adjacent[row, col])
+            limit = max_neighbor_count(row, col, rows=revealed.shape[0], cols=revealed.shape[1])
+            if value > limit:
+                impossible.append((row, col, value, limit))
+
+    if not impossible:
+        return 0
+    if len(impossible) > max_repairs:
+        sample = ", ".join(f"r{row}c{col}:{value}>{limit}" for row, col, value, limit in impossible[:8])
+        raise RuntimeError(f"invalid board read; impossible numbers detected ({len(impossible)}): {sample}")
+
+    for row, col, _, _ in impossible:
+        revealed[row, col] = False
+        adjacent[row, col] = 0
+        mine_like[row, col] = False
+    return len(impossible)
+
+
 def _digit_mask(array: np.ndarray) -> np.ndarray:
     saturation, value = _saturation_value(array)
     colorful = (saturation > 0.42) & (value < 0.92)
@@ -914,6 +1014,7 @@ def board_with_virtual_flags(raw_board: ScreenBoard, virtual_flags: np.ndarray) 
         grid=raw_board.grid,
         screenshot=raw_board.screenshot,
         step_count=raw_board.step_count,
+        read_repairs=raw_board.read_repairs,
     )
 
 
@@ -1126,6 +1227,8 @@ def play_game(
         before_signature = board_signature(board)
         before_revealed = int(board.revealed.sum())
         action_record = {"step": step, "action_index": int(action_index), "action": action_to_dict(action)}
+        if board.read_repairs:
+            action_record["before_read_repairs"] = int(board.read_repairs)
         if queued_open is not None:
             action_record["queued_from_chord"] = True
         if action.kind == ActionType.OPEN and desktop.grid is not None:
@@ -1203,6 +1306,8 @@ def play_game(
         changed = board_signature(after_board) != before_signature
         progress = int(after_board.revealed.sum()) > before_revealed or after_board.done
         action_record["after_target"] = cell_snapshot(after_board, action.row, action.col)
+        if after_board.read_repairs:
+            action_record["after_read_repairs"] = int(after_board.read_repairs)
         action_record["after_grid"] = {
             "x0": int(after_board.grid.x_lines[0]),
             "x1": int(after_board.grid.x_lines[-1]),
@@ -1273,6 +1378,7 @@ def frame_from_board(board: ScreenBoard, step: int, action: dict[str, Any] | Non
         "done": bool(board.done),
         "revealed_safe_cells": int(board.revealed.sum()),
         "flags": int(board.flagged.sum()),
+        "read_repairs": int(board.read_repairs),
         "board": {
             "revealed": board.revealed.astype(np.int8).tolist(),
             "flagged": board.flagged.astype(np.int8).tolist(),
@@ -1360,6 +1466,7 @@ def summary_from_board(
         "reclicks": sum(int(action.get("reclicks", 0)) for action in actions),
         "revealed_safe_cells": int(board.revealed.sum()),
         "flags": int(board.flagged.sum()),
+        "read_repairs": int(board.read_repairs),
         "terminal_dialog": terminal_dialog,
         "elapsed_seconds": elapsed,
         "seconds_per_action": (elapsed / action_count) if action_count else None,
@@ -1562,7 +1669,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "artifacts" / "full_rlmix_20.pt")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--capture-backend", choices=["auto", "pil", "mss"], default="auto")
+    parser.add_argument("--capture-backend", choices=["auto", "pil", "mss", "window"], default="auto")
     parser.add_argument("--read-mode", choices=["fast", "accurate"], default="fast")
     parser.add_argument("--speed-profile", choices=["safe", "fast", "turbo", "custom"], default="safe")
     parser.add_argument("--inference-flips", action="store_true")
