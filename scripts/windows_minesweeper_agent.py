@@ -83,6 +83,7 @@ class ScreenBoard:
     mine_like: np.ndarray
     grid: Grid
     screenshot: Image.Image | None
+    pixels: np.ndarray | None = None
     step_count: int = 0
     read_repairs: int = 0
     read_restores: int = 0
@@ -344,6 +345,7 @@ class WindowsMinesweeper:
                     adjacent[row, col] = int(cell["number"])
 
         repairs = repair_impossible_numbers(revealed, adjacent, mine_like)
+        board_pixels = np.asarray(source_image.crop(grid_bbox(read_grid)))
 
         return ScreenBoard(
             revealed=revealed,
@@ -352,6 +354,7 @@ class WindowsMinesweeper:
             mine_like=mine_like,
             grid=read_grid,
             screenshot=screenshot,
+            pixels=board_pixels,
             step_count=step_count,
             read_repairs=repairs,
         )
@@ -365,18 +368,35 @@ class WindowsMinesweeper:
         if self.grid is None:
             board_array, grid_for_read, screen_grid = self.capture_client_grid()
             self.grid = screen_grid
-            screenshot = Image.fromarray(board_array[grid_bbox(grid_for_read)], mode="RGB") if keep_screenshot else None
-            return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count, previous_board)
+            board_pixels = board_array[grid_bbox(grid_for_read)]
+            screenshot = Image.fromarray(board_pixels, mode="RGB") if keep_screenshot else None
+            return self._read_board_from_array(
+                board_array,
+                grid_for_read,
+                screenshot,
+                board_pixels,
+                step_count,
+                previous_board,
+            )
 
         board_array, grid_for_read = self.capture_board_array(self.grid)
-        screenshot = Image.fromarray(board_array, mode="RGB") if keep_screenshot else None
-        return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count, previous_board)
+        board_pixels = board_array
+        screenshot = Image.fromarray(board_pixels, mode="RGB") if keep_screenshot else None
+        return self._read_board_from_array(
+            board_array,
+            grid_for_read,
+            screenshot,
+            board_pixels,
+            step_count,
+            previous_board,
+        )
 
     def _read_board_from_array(
         self,
         board_array: np.ndarray,
         grid: Grid,
         screenshot: Image.Image | None,
+        board_pixels: np.ndarray,
         step_count: int,
         previous_board: ScreenBoard | None = None,
     ) -> ScreenBoard:
@@ -384,14 +404,9 @@ class WindowsMinesweeper:
         flagged = np.zeros((ROWS, COLS), dtype=bool)
         adjacent = np.zeros((ROWS, COLS), dtype=np.int8)
         mine_like = np.zeros((ROWS, COLS), dtype=bool)
-        previous_pixels = None
         changed_mask = None
-        if previous_board is not None and previous_board.screenshot is not None:
-            previous_pixels = np.asarray(previous_board.screenshot.convert("RGB"))
-            if previous_pixels.shape != board_array.shape:
-                previous_pixels = None
-            else:
-                changed_mask = np.any(board_array != previous_pixels, axis=2)
+        if previous_board is not None and previous_board.pixels is not None and previous_board.pixels.shape == board_array.shape:
+            changed_mask = np.any(board_array != previous_board.pixels, axis=2)
 
         for row in range(ROWS):
             for col in range(COLS):
@@ -421,6 +436,7 @@ class WindowsMinesweeper:
             mine_like=mine_like,
             grid=grid,
             screenshot=screenshot,
+            pixels=board_pixels,
             step_count=step_count,
             read_repairs=repairs,
         )
@@ -843,6 +859,7 @@ def restore_revealed_cells(board: ScreenBoard, previous: ScreenBoard | None) -> 
         mine_like=mine_like,
         grid=board.grid,
         screenshot=board.screenshot,
+        pixels=board.pixels,
         step_count=board.step_count,
         read_repairs=board.read_repairs,
         read_restores=int(restored.sum()),
@@ -967,7 +984,12 @@ def apply_solver_safety_filter(
 
 
 def draw_overlay(board: ScreenBoard, path: Path) -> None:
-    image = board.screenshot.copy()
+    if board.screenshot is not None:
+        image = board.screenshot.copy()
+    elif board.pixels is not None:
+        image = Image.fromarray(board.pixels, mode="RGB")
+    else:
+        raise RuntimeError("board has no image data for overlay")
     draw = ImageDraw.Draw(image)
     for row in range(ROWS):
         for col in range(COLS):
@@ -1078,6 +1100,7 @@ def board_with_virtual_flags(raw_board: ScreenBoard, virtual_flags: np.ndarray) 
         mine_like=raw_board.mine_like.copy(),
         grid=raw_board.grid,
         screenshot=raw_board.screenshot,
+        pixels=raw_board.pixels,
         step_count=raw_board.step_count,
         read_repairs=raw_board.read_repairs,
         read_restores=raw_board.read_restores,
@@ -1236,7 +1259,7 @@ def play_game(
     if desktop.dialog_is_open():
         title = desktop.dialog_title() or "unknown dialog"
         raise RuntimeError(f"could not start Minesweeper game; dialog is still open: {title}")
-    keep_screenshot = True
+    keep_screenshot = False
     action_delay = float(timing["action_delay"])
     settle_reads = int(timing["settle_reads"])
     settle_read_delay = float(timing["settle_read_delay"])
