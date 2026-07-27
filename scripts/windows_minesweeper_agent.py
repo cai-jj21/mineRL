@@ -85,6 +85,7 @@ class ScreenBoard:
     screenshot: Image.Image | None
     step_count: int = 0
     read_repairs: int = 0
+    read_restores: int = 0
 
     rows: int = ROWS
     cols: int = COLS
@@ -669,19 +670,32 @@ def spaced_lines(start: int, end: int, cells: int) -> list[int]:
     return [int(round(start + (end - start) * index / cells)) for index in range(cells + 1)]
 
 
+def _center_patch(array: np.ndarray) -> np.ndarray:
+    height, width = array.shape[:2]
+    y0 = max(0, height // 4)
+    y1 = min(height, height - height // 4)
+    x0 = max(0, width // 4)
+    x1 = min(width, width - width // 4)
+    patch = array[y0:y1, x0:x1]
+    return patch if patch.size else array
+
+
 def classify_cell(crop: Image.Image) -> dict[str, Any]:
     array = np.asarray(crop.convert("RGB"))
-    mean = array.reshape(-1, 3).mean(axis=0)
     saturation, value = _saturation_value(array)
+    center = _center_patch(array)
+    center_mean = center.reshape(-1, 3).mean(axis=0)
+    center_saturation, center_value = _saturation_value(center)
     median_saturation = float(np.quantile(saturation, 0.5))
     value_mean = float(value.mean())
     revealed_background = median_saturation < 0.24 and value_mean > 0.62
-    blue_background = mean[2] - mean[0] > 42 and mean[2] - mean[1] > 15 and mean[1] > mean[0]
+    center_blue = center_mean[2] - center_mean[0] > 42 and center_mean[2] - center_mean[1] > 15 and center_mean[1] > center_mean[0]
+    center_revealed = float(np.quantile(center_saturation, 0.5)) < 0.25 and float(center_value.mean()) > 0.45
 
     red_pixels = (array[:, :, 0] > 145) & (array[:, :, 1] < 110) & (array[:, :, 2] < 115)
     yellow_pixels = (array[:, :, 0] > 145) & (array[:, :, 1] > 100) & (array[:, :, 2] < 90)
     dark_pixels = (array[:, :, 0] < 45) & (array[:, :, 1] < 45) & (array[:, :, 2] < 55)
-    if blue_background and not revealed_background:
+    if center_blue and not revealed_background and not center_revealed:
         if int(red_pixels.sum()) > 35 or int(yellow_pixels.sum()) > 35:
             return {"kind": "flagged", "number": 0}
         if int(dark_pixels.sum()) > 220 and int(red_pixels.sum()) > 20:
@@ -700,24 +714,17 @@ def classify_cell_fast(array: np.ndarray) -> dict[str, Any]:
         return {"kind": "hidden", "number": 0}
 
     f = array.astype(np.int16, copy=False)
-    corners = (
-        f[2:12, 2:12],
-        f[2:12, -12:-2],
-        f[-12:-2, 2:12],
-        f[-12:-2, -12:-2],
-    )
-
-    blue_votes = 0
-    for patch in corners:
-        mean = patch.reshape(-1, 3).mean(axis=0)
-        if mean[2] - mean[0] > 42 and mean[2] - mean[1] > 15 and mean[1] > mean[0]:
-            blue_votes += 1
+    center = _center_patch(f)
+    center_mean = center.reshape(-1, 3).mean(axis=0)
+    center_saturation, center_value = _saturation_value(center)
+    center_blue = center_mean[2] - center_mean[0] > 42 and center_mean[2] - center_mean[1] > 15 and center_mean[1] > center_mean[0]
+    center_revealed = float(np.quantile(center_saturation, 0.5)) < 0.25 and float(center_value.mean()) > 0.45
 
     red_pixels = (f[:, :, 0] > 145) & (f[:, :, 1] < 110) & (f[:, :, 2] < 115)
     yellow_pixels = (f[:, :, 0] > 145) & (f[:, :, 1] > 100) & (f[:, :, 2] < 90)
     dark_pixels = (f[:, :, 0] < 45) & (f[:, :, 1] < 45) & (f[:, :, 2] < 55)
 
-    if blue_votes >= 3:
+    if center_blue and not center_revealed:
         red_count = int(red_pixels.sum())
         yellow_count = int(yellow_pixels.sum())
         if red_count > 35 or yellow_count > 35:
@@ -782,6 +789,35 @@ def repair_impossible_numbers(
         adjacent[row, col] = 0
         mine_like[row, col] = False
     return len(impossible)
+
+
+def restore_revealed_cells(board: ScreenBoard, previous: ScreenBoard | None) -> ScreenBoard:
+    if previous is None or previous.done or board.done:
+        return board
+    restored = previous.revealed & ~board.revealed
+    if not bool(restored.any()):
+        return board
+
+    revealed = board.revealed.copy()
+    flagged = board.flagged.copy()
+    adjacent = board.adjacent.copy()
+    mine_like = board.mine_like.copy()
+    revealed[restored] = True
+    flagged[restored] = previous.flagged[restored]
+    adjacent[restored] = previous.adjacent[restored]
+    mine_like[restored] = previous.mine_like[restored]
+
+    return ScreenBoard(
+        revealed=revealed,
+        flagged=flagged,
+        adjacent=adjacent,
+        mine_like=mine_like,
+        grid=board.grid,
+        screenshot=board.screenshot,
+        step_count=board.step_count,
+        read_repairs=board.read_repairs,
+        read_restores=int(restored.sum()),
+    )
 
 
 def _digit_mask(array: np.ndarray) -> np.ndarray:
@@ -1015,6 +1051,7 @@ def board_with_virtual_flags(raw_board: ScreenBoard, virtual_flags: np.ndarray) 
         screenshot=raw_board.screenshot,
         step_count=raw_board.step_count,
         read_repairs=raw_board.read_repairs,
+        read_restores=raw_board.read_restores,
     )
 
 
@@ -1174,6 +1211,9 @@ def play_game(
     action_delay = float(timing["action_delay"])
     settle_reads = int(timing["settle_reads"])
     settle_read_delay = float(timing["settle_read_delay"])
+    if desktop.capture_backend == "window":
+        settle_reads = max(2, settle_reads)
+        settle_read_delay = max(settle_read_delay, 0.01)
     frames: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     use_memory_flags = args.flag_mode == "memory"
@@ -1189,7 +1229,14 @@ def play_game(
         if stop_requested():
             break
         try:
-            raw_board = desktop.read_board(step_count=step, keep_screenshot=keep_screenshot)
+            raw_board = read_stable_board(
+                desktop,
+                step_count=step,
+                keep_screenshot=keep_screenshot,
+                reads=settle_reads,
+                delay=settle_read_delay,
+                previous_board=last_board,
+            )
         except RuntimeError:
             terminal_dialog = desktop.dialog_title()
             break
@@ -1242,6 +1289,8 @@ def play_game(
         action_record = {"step": step, "action_index": int(action_index), "action": action_to_dict(action)}
         if board.read_repairs:
             action_record["before_read_repairs"] = int(board.read_repairs)
+        if board.read_restores:
+            action_record["before_read_restores"] = int(board.read_restores)
         if queued_open is not None:
             action_record["queued_from_chord"] = True
         if action.kind == ActionType.OPEN and desktop.grid is not None:
@@ -1313,6 +1362,7 @@ def play_game(
                 keep_screenshot=keep_screenshot,
                 reads=settle_reads,
                 delay=settle_read_delay,
+                previous_board=board,
             )
         except RuntimeError:
             terminal_dialog = desktop.dialog_title()
@@ -1320,12 +1370,30 @@ def play_game(
             actions.append(action_record)
             break
         after_board = memory_board(after_raw_board, virtual_flags, use_memory_flags)
+        if action.kind == ActionType.OPEN and (
+            after_board.read_repairs > 0 or not after_board.revealed[action.row, action.col]
+        ):
+            retry_board = confirm_open_read(
+                desktop=desktop,
+                action=action,
+                previous_board=board,
+                step_count=step + 1,
+                keep_screenshot=keep_screenshot,
+                settle_reads=settle_reads,
+                settle_read_delay=settle_read_delay,
+                virtual_flags=virtual_flags,
+                use_memory_flags=use_memory_flags,
+            )
+            if retry_board is not None:
+                after_board = retry_board
         last_board = after_board
         changed = board_signature(after_board) != before_signature
         progress = int(after_board.revealed.sum()) > before_revealed or after_board.done
         action_record["after_target"] = cell_snapshot(after_board, action.row, action.col)
         if after_board.read_repairs:
             action_record["after_read_repairs"] = int(after_board.read_repairs)
+        if after_board.read_restores:
+            action_record["after_read_restores"] = int(after_board.read_restores)
         action_record["after_grid"] = {
             "x0": int(after_board.grid.x_lines[0]),
             "x1": int(after_board.grid.x_lines[-1]),
@@ -1362,6 +1430,7 @@ def play_game(
                 keep_screenshot=keep_screenshot,
                 reads=settle_reads,
                 delay=settle_read_delay,
+                previous_board=last_board,
             )
         except RuntimeError:
             final_board = empty_board(desktop, keep_screenshot=keep_screenshot)
@@ -1402,6 +1471,7 @@ def frame_from_board(board: ScreenBoard, step: int, action: dict[str, Any] | Non
         "revealed_safe_cells": int(board.revealed.sum()),
         "flags": int(board.flagged.sum()),
         "read_repairs": int(board.read_repairs),
+        "read_restores": int(board.read_restores),
         "board": {
             "revealed": board.revealed.astype(np.int8).tolist(),
             "flagged": board.flagged.astype(np.int8).tolist(),
@@ -1439,27 +1509,76 @@ def read_stable_board(
     keep_screenshot: bool,
     reads: int = 2,
     delay: float = 0.015,
+    previous_board: ScreenBoard | None = None,
 ) -> ScreenBoard:
-    board = desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot)
+    board = restore_revealed_cells(
+        desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot),
+        previous_board,
+    )
     reads = max(1, int(reads))
     for _ in range(reads - 1):
         previous_signature = board_signature(board)
         time.sleep(max(0.0, delay))
-        next_board = desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot)
+        next_board = restore_revealed_cells(
+            desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot),
+            board,
+        )
+        if next_board.read_repairs == 0 and board.read_repairs == 0 and board_signature(next_board) == previous_signature:
+            return next_board
+        if next_board.read_repairs < board.read_repairs:
+            board = next_board
+            continue
         board = next_board
-        if board_signature(next_board) == previous_signature:
-            break
     return board
 
 
-def board_signature(board: ScreenBoard) -> tuple[bytes, bytes, bytes, bool, bool]:
+def board_signature(board: ScreenBoard) -> tuple[bytes, bytes, bytes, bool, bool, int]:
     return (
         board.revealed.tobytes(),
         board.flagged.tobytes(),
         board.adjacent.tobytes(),
         bool(board.won),
         bool(board.lost),
+        int(board.read_repairs),
     )
+
+
+def confirm_open_read(
+    desktop: WindowsMinesweeper,
+    action: Action,
+    previous_board: ScreenBoard | None,
+    step_count: int,
+    keep_screenshot: bool,
+    settle_reads: int,
+    settle_read_delay: float,
+    virtual_flags: np.ndarray,
+    use_memory_flags: bool,
+) -> ScreenBoard | None:
+    best_board: ScreenBoard | None = None
+    attempts = max(1, min(3, settle_reads))
+    for _ in range(attempts):
+        try:
+            retry_raw_board = read_stable_board(
+                desktop,
+                step_count=step_count,
+                keep_screenshot=keep_screenshot,
+                reads=max(2, settle_reads),
+                delay=settle_read_delay,
+                previous_board=previous_board,
+            )
+        except RuntimeError:
+            return None
+        retry_board = memory_board(retry_raw_board, virtual_flags, use_memory_flags)
+        if best_board is None:
+            best_board = retry_board
+        else:
+            best_score = int(best_board.revealed.sum()) - best_board.read_repairs
+            retry_score = int(retry_board.revealed.sum()) - retry_board.read_repairs
+            if retry_score > best_score:
+                best_board = retry_board
+        if retry_board.revealed[action.row, action.col] and retry_board.read_repairs == 0:
+            return retry_board
+    return best_board
 
 
 def summary_from_board(
@@ -1490,6 +1609,7 @@ def summary_from_board(
         "revealed_safe_cells": int(board.revealed.sum()),
         "flags": int(board.flagged.sum()),
         "read_repairs": int(board.read_repairs),
+        "read_restores": int(board.read_restores),
         "blocked_repeat_open_actions": sum(1 for action in actions if action.get("blocked_repeat_open")),
         "terminal_dialog": terminal_dialog,
         "elapsed_seconds": elapsed,
@@ -1642,6 +1762,79 @@ def run_streak(args: argparse.Namespace) -> None:
                 return
 
 
+def run_benchmark(args: argparse.Namespace) -> None:
+    output_dir = args.output_dir or default_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    clear_stop_request()
+    args.clear_stop_on_start = False
+
+    timing = live_timing_settings(args)
+    desktop = WindowsMinesweeper(
+        capture_delay=float(timing["capture_delay"]),
+        capture_backend=args.capture_backend,
+        read_mode=args.read_mode,
+        click_pause=float(timing["click_pause"]),
+        cursor_settle=float(timing["cursor_settle"]),
+    )
+    trainer = load_configured_trainer(args)
+    results: list[dict[str, Any]] = []
+    started_at = time.time()
+    first_start_mode = "restart" if args.start_mode == "auto" else args.start_mode
+
+    for game_index in range(1, args.games + 1):
+        if stop_requested():
+            break
+        game_start_mode = first_start_mode if game_index == 1 else "new"
+        result = play_game(
+            args,
+            game_index=game_index,
+            output_dir=output_dir,
+            desktop=desktop,
+            trainer=trainer,
+            start_mode=game_start_mode,
+            timing=timing,
+        )
+        results.append(result)
+
+    games_played = len(results)
+    summaries = [result["summary"] for result in results]
+    wins = sum(1 for summary in summaries if summary.get("won"))
+    avg_elapsed = (sum(float(summary.get("elapsed_seconds", 0.0)) for summary in summaries) / games_played) if games_played else 0.0
+    avg_steps = (sum(float(summary.get("agent_steps", 0.0)) for summary in summaries) / games_played) if games_played else 0.0
+    target_passed = (
+        games_played > 0
+        and wins / games_played >= float(args.target_win_rate)
+        and avg_elapsed <= float(args.target_avg_seconds)
+    )
+    status = "stopped" if stop_requested() and games_played < int(args.games) else "completed"
+    manifest = {
+        "status": status,
+        "output_dir": str(output_dir),
+        "games_requested": int(args.games),
+        "games_played": games_played,
+        "checkpoint": str(args.checkpoint),
+        "timing": timing,
+        "final_decision_mode": "rl",
+        "solver_allowed_during_final_decision": False,
+        "decision_action_mode": args.flag_mode,
+        "no_progress_reclicks": timing["no_progress_reclicks"],
+        "reclick_delay": timing["reclick_delay"],
+        "speed_profile": getattr(args, "speed_profile", "safe"),
+        "model_flip_ensemble": args.inference_flips,
+        "model_ensemble_method": args.inference_ensemble,
+        "target_win_rate": float(args.target_win_rate),
+        "target_avg_seconds": float(args.target_avg_seconds),
+        "target_passed": target_passed,
+        "win_rate": wins / games_played if games_played else 0.0,
+        "avg_elapsed_seconds": avg_elapsed,
+        "avg_agent_steps": avg_steps,
+        "results": results,
+        "elapsed_seconds": time.time() - started_at,
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(json.dumps(manifest, indent=2))
+
+
 def streak_manifest(
     args: argparse.Namespace,
     output_dir: Path,
@@ -1690,7 +1883,7 @@ def default_output_dir() -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Drive the desktop Windows Minesweeper with the RL agent.")
-    parser.add_argument("--checkpoint", type=Path, default=ROOT / "artifacts" / "full_rlmix_20.pt")
+    parser.add_argument("--checkpoint", type=Path, default=ROOT / "artifacts" / "full_rlmix_20_refine.pt")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--capture-backend", choices=["auto", "pil", "mss", "window"], default="auto")
@@ -1726,6 +1919,10 @@ def main() -> None:
 
     subparsers.add_parser("stop", help="request any running desktop agent to stop")
     subparsers.add_parser("clear-stop", help="clear a stale stop request file")
+    benchmark_parser = subparsers.add_parser("benchmark", help="run a fixed number of desktop games and report aggregate metrics")
+    benchmark_parser.add_argument("--games", type=int, default=10)
+    benchmark_parser.add_argument("--target-win-rate", type=float, default=0.4)
+    benchmark_parser.add_argument("--target-avg-seconds", type=float, default=60.0)
 
     args = parser.parse_args()
     if args.command == "read":
@@ -1776,6 +1973,8 @@ def main() -> None:
         print(json.dumps({"output_dir": str(output_dir), "result": result}, indent=2))
     elif args.command == "run-streak":
         run_streak(args)
+    elif args.command == "benchmark":
+        run_benchmark(args)
     elif args.command == "stop":
         previous = read_stop_request()
         request_stop(reason="command")
