@@ -1052,7 +1052,11 @@ def chord_open_targets(board: ScreenBoard, action: Action) -> list[Action]:
     return targets
 
 
-def pop_legal_pending_open(pending_opens: list[Action], board: ScreenBoard) -> Action | None:
+def pop_legal_pending_open(
+    pending_opens: list[Action],
+    board: ScreenBoard,
+    blocked_open_cells: set[tuple[int, int]] | None = None,
+) -> Action | None:
     while pending_opens:
         action = pending_opens.pop(0)
         if (
@@ -1061,6 +1065,7 @@ def pop_legal_pending_open(pending_opens: list[Action], board: ScreenBoard) -> A
             and 0 <= action.col < COLS
             and not board.revealed[action.row, action.col]
             and not board.flagged[action.row, action.col]
+            and (blocked_open_cells is None or (action.row, action.col) not in blocked_open_cells)
         ):
             return action
     return None
@@ -1174,6 +1179,7 @@ def play_game(
     use_memory_flags = args.flag_mode == "memory"
     virtual_flags = np.zeros((ROWS, COLS), dtype=bool)
     pending_open_actions: list[Action] = []
+    blocked_open_cells: set[tuple[int, int]] = set()
     no_progress_streak = 0
     terminal_dialog: str | None = None
     last_board: ScreenBoard | None = None
@@ -1196,13 +1202,20 @@ def play_game(
         if board.done:
             break
 
-        queued_open = pop_legal_pending_open(pending_open_actions, board) if use_memory_flags else None
+        queued_open = pop_legal_pending_open(pending_open_actions, board, blocked_open_cells) if use_memory_flags else None
         if queued_open is not None:
             action = queued_open
             action_index = action_to_index(action, ROWS, COLS)
         else:
             encoded_board, global_features, action_mask = encode_state(board)
             action_mask = trainer._decision_action_mask(action_mask)
+            if blocked_open_cells:
+                action_mask = action_mask.copy()
+                open_mask = action_mask[action_channel(ActionType.OPEN)]
+                for row, col in blocked_open_cells:
+                    if 0 <= row < ROWS and 0 <= col < COLS:
+                        open_mask[row, col] = False
+                action_mask[action_channel(ActionType.OPEN)] = open_mask
             if not action_mask.any():
                 if int(board.revealed.sum()) == 0:
                     action = Action(ActionType.OPEN, ROWS // 2, COLS // 2)
@@ -1267,6 +1280,11 @@ def play_game(
                     break
                 continue
             queued_targets = chord_open_targets(board, action)
+            queued_targets = [
+                target
+                for target in queued_targets
+                if (target.row, target.col) not in blocked_open_cells
+            ]
             action_record["virtual_only"] = True
             if queued_targets:
                 action_record["queued_opens"] = [action_to_dict(target) for target in queued_targets]
@@ -1320,8 +1338,13 @@ def play_game(
         if not changed or not progress:
             action_record["no_progress"] = True
             no_progress_streak += 1
+            if action.kind == ActionType.OPEN:
+                blocked_open_cells.add((action.row, action.col))
+                action_record["blocked_repeat_open"] = True
         else:
             no_progress_streak = 0
+            if blocked_open_cells:
+                blocked_open_cells.clear()
         actions.append(action_record)
         if no_progress_streak >= args.stall_limit:
             break
@@ -1467,6 +1490,7 @@ def summary_from_board(
         "revealed_safe_cells": int(board.revealed.sum()),
         "flags": int(board.flagged.sum()),
         "read_repairs": int(board.read_repairs),
+        "blocked_repeat_open_actions": sum(1 for action in actions if action.get("blocked_repeat_open")),
         "terminal_dialog": terminal_dialog,
         "elapsed_seconds": elapsed,
         "seconds_per_action": (elapsed / action_count) if action_count else None,
