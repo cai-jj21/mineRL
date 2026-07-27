@@ -385,15 +385,18 @@ class WindowsMinesweeper:
         adjacent = np.zeros((ROWS, COLS), dtype=np.int8)
         mine_like = np.zeros((ROWS, COLS), dtype=bool)
         previous_pixels = None
+        changed_mask = None
         if previous_board is not None and previous_board.screenshot is not None:
             previous_pixels = np.asarray(previous_board.screenshot.convert("RGB"))
             if previous_pixels.shape != board_array.shape:
                 previous_pixels = None
+            else:
+                changed_mask = np.any(board_array != previous_pixels, axis=2)
 
         for row in range(ROWS):
             for col in range(COLS):
                 x0, y0, x1, y1 = grid.crop_box(row, col)
-                if previous_pixels is not None and np.array_equal(board_array[y0:y1, x0:x1], previous_pixels[y0:y1, x0:x1]):
+                if changed_mask is not None and not bool(changed_mask[y0:y1, x0:x1].any()):
                     revealed[row, col] = previous_board.revealed[row, col]
                     flagged[row, col] = previous_board.flagged[row, col]
                     adjacent[row, col] = previous_board.adjacent[row, col]
@@ -1238,8 +1241,8 @@ def play_game(
     settle_reads = int(timing["settle_reads"])
     settle_read_delay = float(timing["settle_read_delay"])
     if desktop.capture_backend == "window":
-        settle_reads = max(2, settle_reads)
-        settle_read_delay = max(settle_read_delay, 0.01)
+        settle_reads = max(1, settle_reads)
+        settle_read_delay = max(0.0, settle_read_delay)
     frames: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     use_memory_flags = args.flag_mode == "memory"
@@ -1751,6 +1754,10 @@ def run_streak(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     clear_stop_request()
     args.clear_stop_on_start = False
+    if getattr(args, "record_frames", "all") == "all":
+        args.record_frames = "final"
+    if not getattr(args, "no_final_images", False):
+        args.no_final_images = True
     streak = 0
     results: list[dict[str, Any]] = []
     timing = live_timing_settings(args)
@@ -1799,6 +1806,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     clear_stop_request()
     args.clear_stop_on_start = False
+    args.record_frames = "none"
+    args.no_final_images = True
 
     timing = live_timing_settings(args)
     desktop = WindowsMinesweeper(
@@ -1954,6 +1963,14 @@ def main() -> None:
     streak_parser = subparsers.add_parser("run-streak", help="play until the requested winning streak is reached")
     streak_parser.add_argument("--streak-length", type=int, default=10)
     streak_parser.add_argument("--max-games", type=int, default=100)
+    streak_parser.set_defaults(
+        capture_backend="window",
+        read_mode="fast",
+        speed_profile="fast",
+        start_mode="restart",
+        record_frames="final",
+        no_final_images=True,
+    )
 
     subparsers.add_parser("stop", help="request any running desktop agent to stop")
     subparsers.add_parser("clear-stop", help="clear a stale stop request file")
@@ -1961,7 +1978,14 @@ def main() -> None:
     benchmark_parser.add_argument("--games", type=int, default=10)
     benchmark_parser.add_argument("--target-win-rate", type=float, default=0.4)
     benchmark_parser.add_argument("--target-avg-seconds", type=float, default=60.0)
-    benchmark_parser.set_defaults(speed_profile="fast", start_mode="restart")
+    benchmark_parser.set_defaults(
+        capture_backend="window",
+        read_mode="fast",
+        speed_profile="fast",
+        start_mode="restart",
+        record_frames="none",
+        no_final_images=True,
+    )
 
     args = parser.parse_args()
     if args.command == "read":
