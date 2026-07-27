@@ -304,18 +304,27 @@ class WindowsMinesweeper:
             y_lines=[y + top for y in grid.y_lines],
         )
 
-    def read_board(self, step_count: int = 0, keep_screenshot: bool = True) -> ScreenBoard:
+    def read_board(
+        self,
+        step_count: int = 0,
+        keep_screenshot: bool = True,
+        previous_board: ScreenBoard | None = None,
+    ) -> ScreenBoard:
         if self.dialog_is_open():
             raise RuntimeError("a Minesweeper dialog is open; handle it before reading the board")
         if self.read_mode == "fast":
-            return self._read_board_fast(step_count=step_count, keep_screenshot=keep_screenshot)
+            return self._read_board_fast(
+                step_count=step_count,
+                keep_screenshot=keep_screenshot,
+                previous_board=previous_board,
+            )
         if self.grid is None:
             array, read_grid, screen_grid = self.capture_client_grid()
             self.grid = screen_grid
             source_image = Image.fromarray(array, mode="RGB")
         else:
             source_image, read_grid = self.capture_board(self.grid)
-        screenshot = source_image if keep_screenshot else None
+        screenshot = source_image.crop(grid_bbox(read_grid)) if keep_screenshot else None
         revealed = np.zeros((ROWS, COLS), dtype=bool)
         flagged = np.zeros((ROWS, COLS), dtype=bool)
         adjacent = np.zeros((ROWS, COLS), dtype=np.int8)
@@ -347,16 +356,21 @@ class WindowsMinesweeper:
             read_repairs=repairs,
         )
 
-    def _read_board_fast(self, step_count: int = 0, keep_screenshot: bool = True) -> ScreenBoard:
+    def _read_board_fast(
+        self,
+        step_count: int = 0,
+        keep_screenshot: bool = True,
+        previous_board: ScreenBoard | None = None,
+    ) -> ScreenBoard:
         if self.grid is None:
             board_array, grid_for_read, screen_grid = self.capture_client_grid()
             self.grid = screen_grid
-            screenshot = Image.fromarray(board_array, mode="RGB") if keep_screenshot else None
-            return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count)
+            screenshot = Image.fromarray(board_array[grid_bbox(grid_for_read)], mode="RGB") if keep_screenshot else None
+            return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count, previous_board)
 
         board_array, grid_for_read = self.capture_board_array(self.grid)
         screenshot = Image.fromarray(board_array, mode="RGB") if keep_screenshot else None
-        return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count)
+        return self._read_board_from_array(board_array, grid_for_read, screenshot, step_count, previous_board)
 
     def _read_board_from_array(
         self,
@@ -364,15 +378,27 @@ class WindowsMinesweeper:
         grid: Grid,
         screenshot: Image.Image | None,
         step_count: int,
+        previous_board: ScreenBoard | None = None,
     ) -> ScreenBoard:
         revealed = np.zeros((ROWS, COLS), dtype=bool)
         flagged = np.zeros((ROWS, COLS), dtype=bool)
         adjacent = np.zeros((ROWS, COLS), dtype=np.int8)
         mine_like = np.zeros((ROWS, COLS), dtype=bool)
+        previous_pixels = None
+        if previous_board is not None and previous_board.screenshot is not None:
+            previous_pixels = np.asarray(previous_board.screenshot.convert("RGB"))
+            if previous_pixels.shape != board_array.shape:
+                previous_pixels = None
 
         for row in range(ROWS):
             for col in range(COLS):
                 x0, y0, x1, y1 = grid.crop_box(row, col)
+                if previous_pixels is not None and np.array_equal(board_array[y0:y1, x0:x1], previous_pixels[y0:y1, x0:x1]):
+                    revealed[row, col] = previous_board.revealed[row, col]
+                    flagged[row, col] = previous_board.flagged[row, col]
+                    adjacent[row, col] = previous_board.adjacent[row, col]
+                    mine_like[row, col] = previous_board.mine_like[row, col]
+                    continue
                 cell = classify_cell_fast(board_array[y0:y1, x0:x1])
                 if cell["kind"] == "flagged":
                     flagged[row, col] = True
@@ -1207,7 +1233,7 @@ def play_game(
     if desktop.dialog_is_open():
         title = desktop.dialog_title() or "unknown dialog"
         raise RuntimeError(f"could not start Minesweeper game; dialog is still open: {title}")
-    keep_screenshot = False
+    keep_screenshot = True
     action_delay = float(timing["action_delay"])
     settle_reads = int(timing["settle_reads"])
     settle_read_delay = float(timing["settle_read_delay"])
@@ -1222,25 +1248,27 @@ def play_game(
     blocked_open_cells: set[tuple[int, int]] = set()
     no_progress_streak = 0
     terminal_dialog: str | None = None
+    latest_raw_board: ScreenBoard | None = None
     last_board: ScreenBoard | None = None
     started_at = time.time()
 
     for step in range(args.max_steps):
         if stop_requested():
             break
-        try:
-            raw_board = read_stable_board(
-                desktop,
-                step_count=step,
-                keep_screenshot=keep_screenshot,
-                reads=settle_reads,
-                delay=settle_read_delay,
-                previous_board=last_board,
-            )
-        except RuntimeError:
-            terminal_dialog = desktop.dialog_title()
-            break
-        board = memory_board(raw_board, virtual_flags, use_memory_flags)
+        if latest_raw_board is None:
+            try:
+                latest_raw_board = read_stable_board(
+                    desktop,
+                    step_count=step,
+                    keep_screenshot=keep_screenshot,
+                    reads=settle_reads,
+                    delay=settle_read_delay,
+                    previous_board=last_board,
+                )
+            except RuntimeError:
+                terminal_dialog = desktop.dialog_title()
+                break
+        board = memory_board(latest_raw_board, virtual_flags, use_memory_flags)
         last_board = board
         frame_index: int | None = None
         if args.record_frames == "all":
@@ -1308,6 +1336,7 @@ def play_game(
                     action_record["virtual_only"] = True
                     action_record["virtual_change"] = "flag"
                     no_progress_streak = 0
+                    last_board = memory_board(latest_raw_board, virtual_flags, use_memory_flags)
                 else:
                     action_record["no_progress"] = True
                     no_progress_streak += 1
@@ -1321,6 +1350,7 @@ def play_game(
                     action_record["virtual_only"] = True
                     action_record["virtual_change"] = "unflag"
                     no_progress_streak = 0
+                    last_board = memory_board(latest_raw_board, virtual_flags, use_memory_flags)
                 else:
                     action_record["no_progress"] = True
                     no_progress_streak += 1
@@ -1339,6 +1369,7 @@ def play_game(
                 action_record["queued_opens"] = [action_to_dict(target) for target in queued_targets]
                 pending_open_actions.extend(queued_targets)
                 no_progress_streak = 0
+                last_board = board
             else:
                 action_record["no_progress"] = True
                 no_progress_streak += 1
@@ -1369,6 +1400,7 @@ def play_game(
             action_record["terminal_dialog"] = terminal_dialog
             actions.append(action_record)
             break
+        latest_raw_board = after_raw_board
         after_board = memory_board(after_raw_board, virtual_flags, use_memory_flags)
         if action.kind == ActionType.OPEN and (
             after_board.read_repairs > 0 or not after_board.revealed[action.row, action.col]
@@ -1512,7 +1544,7 @@ def read_stable_board(
     previous_board: ScreenBoard | None = None,
 ) -> ScreenBoard:
     board = restore_revealed_cells(
-        desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot),
+        desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot, previous_board=previous_board),
         previous_board,
     )
     reads = max(1, int(reads))
@@ -1520,7 +1552,7 @@ def read_stable_board(
         previous_signature = board_signature(board)
         time.sleep(max(0.0, delay))
         next_board = restore_revealed_cells(
-            desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot),
+            desktop.read_board(step_count=step_count, keep_screenshot=keep_screenshot, previous_board=board),
             board,
         )
         if next_board.read_repairs == 0 and board.read_repairs == 0 and board_signature(next_board) == previous_signature:
@@ -1801,6 +1833,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
     wins = sum(1 for summary in summaries if summary.get("won"))
     avg_elapsed = (sum(float(summary.get("elapsed_seconds", 0.0)) for summary in summaries) / games_played) if games_played else 0.0
     avg_steps = (sum(float(summary.get("agent_steps", 0.0)) for summary in summaries) / games_played) if games_played else 0.0
+    avg_actions_per_second = (
+        sum(float(summary.get("actions_per_second", 0.0) or 0.0) for summary in summaries) / games_played
+        if games_played
+        else 0.0
+    )
     target_passed = (
         games_played > 0
         and wins / games_played >= float(args.target_win_rate)
@@ -1828,6 +1865,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         "win_rate": wins / games_played if games_played else 0.0,
         "avg_elapsed_seconds": avg_elapsed,
         "avg_agent_steps": avg_steps,
+        "avg_actions_per_second": avg_actions_per_second,
         "results": results,
         "elapsed_seconds": time.time() - started_at,
     }
@@ -1923,6 +1961,7 @@ def main() -> None:
     benchmark_parser.add_argument("--games", type=int, default=10)
     benchmark_parser.add_argument("--target-win-rate", type=float, default=0.4)
     benchmark_parser.add_argument("--target-avg-seconds", type=float, default=60.0)
+    benchmark_parser.set_defaults(speed_profile="fast", start_mode="restart")
 
     args = parser.parse_args()
     if args.command == "read":
