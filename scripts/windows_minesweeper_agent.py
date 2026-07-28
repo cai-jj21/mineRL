@@ -1991,6 +1991,7 @@ def main() -> None:
         read_mode="fast",
         speed_profile="fast",
         start_mode="restart",
+        inference_flips=True,
         record_frames="final",
         no_final_images=True,
     )
@@ -2006,6 +2007,7 @@ def main() -> None:
         read_mode="fast",
         speed_profile="fast",
         start_mode="restart",
+        inference_flips=True,
         record_frames="none",
         no_final_images=True,
     )
