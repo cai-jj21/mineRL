@@ -1981,7 +1981,16 @@ def main() -> None:
     read_parser = subparsers.add_parser("read", help="read and print the current board")
     read_parser.add_argument("--overlay", type=Path, default=ROOT / "artifacts" / "windows_agent" / "overlay.png")
 
-    subparsers.add_parser("play-once", help="play one fresh desktop Minesweeper game")
+    play_once_parser = subparsers.add_parser("play-once", help="play one fresh desktop Minesweeper game")
+    play_once_parser.set_defaults(
+        capture_backend="window",
+        read_mode="fast",
+        speed_profile="fast",
+        start_mode="restart",
+        inference_flips=True,
+        record_frames="final",
+        no_final_images=True,
+    )
 
     streak_parser = subparsers.add_parser("run-streak", help="play until the requested winning streak is reached")
     streak_parser.add_argument("--streak-length", type=int, default=10)
