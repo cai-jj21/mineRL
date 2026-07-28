@@ -150,6 +150,14 @@ class MinesweeperTrainer:
     def __init__(self, config: TrainingConfig) -> None:
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() or config.device == "cpu" else "cpu")
+        if self.device.type == "cuda":
+            try:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                torch.backends.cudnn.benchmark = True
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
         self.solver = MinesweeperSolver(exact_limit=config.exact_limit)
         self.model = MinesweeperNet(
             hidden_channels=config.hidden_channels,
