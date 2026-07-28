@@ -1951,6 +1951,15 @@ def default_output_dir() -> Path:
     return ROOT / "artifacts" / "windows_agent" / f"run_{stamp}"
 
 
+def add_subcommand_output_dir(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="write this command's logs under the given directory",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Drive the desktop Windows Minesweeper with the RL agent.")
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "artifacts" / "full_rlmix_20_refine.pt")
@@ -1982,6 +1991,7 @@ def main() -> None:
     read_parser.add_argument("--overlay", type=Path, default=ROOT / "artifacts" / "windows_agent" / "overlay.png")
 
     play_once_parser = subparsers.add_parser("play-once", help="play one fresh desktop Minesweeper game")
+    add_subcommand_output_dir(play_once_parser)
     play_once_parser.set_defaults(
         capture_backend="window",
         read_mode="fast",
@@ -1993,6 +2003,7 @@ def main() -> None:
     )
 
     streak_parser = subparsers.add_parser("run-streak", help="play until the requested winning streak is reached")
+    add_subcommand_output_dir(streak_parser)
     streak_parser.add_argument("--streak-length", type=int, default=10)
     streak_parser.add_argument("--max-games", type=int, default=100)
     streak_parser.set_defaults(
@@ -2008,6 +2019,7 @@ def main() -> None:
     subparsers.add_parser("stop", help="request any running desktop agent to stop")
     subparsers.add_parser("clear-stop", help="clear a stale stop request file")
     benchmark_parser = subparsers.add_parser("benchmark", help="run a fixed number of desktop games and report aggregate metrics")
+    add_subcommand_output_dir(benchmark_parser)
     benchmark_parser.add_argument("--games", type=int, default=10)
     benchmark_parser.add_argument("--target-win-rate", type=float, default=0.4)
     benchmark_parser.add_argument("--target-avg-seconds", type=float, default=60.0)
