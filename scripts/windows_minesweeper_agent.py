@@ -66,7 +66,7 @@ class Grid:
         y = (self.y_lines[row] + self.y_lines[row + 1]) / 2.0
         return int(round(x)), int(round(y))
 
-    def crop_box(self, row: int, col: int, margin: int = 5) -> tuple[int, int, int, int]:
+    def crop_box(self, row: int, col: int, margin: int = 6) -> tuple[int, int, int, int]:
         return (
             self.x_lines[col] + margin,
             self.y_lines[row] + margin,

@@ -72,9 +72,21 @@ def test_crop_grid_array_uses_numpy_axis_order() -> None:
     np.testing.assert_array_equal(crop, array[1:5, 2:6])
 
 
+def test_classify_cell_fast_ignores_border_noise_on_empty_revealed_cell() -> None:
+    cell = np.full((80, 80, 3), [214, 220, 232], dtype=np.uint8)
+    cell[:6, :] = [35, 40, 60]
+    cell[-6:, :] = [35, 40, 60]
+    cell[:, :6] = [35, 40, 60]
+    cell[:, -6:] = [35, 40, 60]
+    cell[8:-8, 8:-8] = [238, 240, 244]
+
+    assert windows_agent.classify_cell_fast(cell[5:-5, 5:-5]) == {"kind": "revealed", "number": 7}
+    assert windows_agent.classify_cell_fast(cell[6:-6, 6:-6]) == {"kind": "revealed", "number": 0}
+
+
 def test_read_board_from_array_reuses_unchanged_cells() -> None:
-    cell_w = 24
-    cell_h = 24
+    cell_w = 32
+    cell_h = 32
     board_array = np.full((windows_agent.ROWS * cell_h, windows_agent.COLS * cell_w, 3), [166, 212, 247], dtype=np.uint8)
     prev_array = board_array.copy()
     board_array[0:cell_h, 2 * cell_w : 3 * cell_w] = [190, 190, 190]
