@@ -1208,7 +1208,7 @@ def live_timing_settings(args: argparse.Namespace) -> dict[str, Any]:
             "settle_reads": min(stable_reads, 2),
             "settle_read_delay": min(stable_read_delay, 0.01),
             "reclick_delay": min(reclick_delay, 0.005),
-            "no_progress_reclicks": 0,
+            "no_progress_reclicks": max(1, no_progress_reclicks),
             "click_pause": 0.005,
             "cursor_settle": 0.002,
         }
@@ -1444,6 +1444,8 @@ def play_game(
                 keep_screenshot=keep_screenshot,
                 settle_reads=settle_reads,
                 settle_read_delay=settle_read_delay,
+                reclicks=int(timing["no_progress_reclicks"]),
+                reclick_delay=float(timing["reclick_delay"]),
                 virtual_flags=virtual_flags,
                 use_memory_flags=use_memory_flags,
             )
@@ -1474,8 +1476,6 @@ def play_game(
                 action_record["blocked_repeat_open"] = True
         else:
             no_progress_streak = 0
-            if blocked_open_cells:
-                blocked_open_cells.clear()
         actions.append(action_record)
         if no_progress_streak >= args.stall_limit:
             break
@@ -1614,12 +1614,20 @@ def confirm_open_read(
     keep_screenshot: bool,
     settle_reads: int,
     settle_read_delay: float,
+    reclicks: int,
+    reclick_delay: float,
     virtual_flags: np.ndarray,
     use_memory_flags: bool,
 ) -> ScreenBoard | None:
     best_board: ScreenBoard | None = None
-    attempts = max(1, min(3, settle_reads))
-    for _ in range(attempts):
+    attempts = max(1, min(3, 1 + max(0, int(reclicks))))
+    for attempt in range(attempts):
+        if attempt > 0:
+            time.sleep(max(0.0, reclick_delay))
+            try:
+                desktop.click_action(action)
+            except RuntimeError:
+                return None
         try:
             retry_raw_board = read_stable_board(
                 desktop,
