@@ -368,7 +368,7 @@ class WindowsMinesweeper:
         if self.grid is None:
             board_array, grid_for_read, screen_grid = self.capture_client_grid()
             self.grid = screen_grid
-            board_pixels = board_array[grid_bbox(grid_for_read)]
+            board_pixels = crop_grid_array(board_array, grid_for_read)
             screenshot = Image.fromarray(board_pixels, mode="RGB") if keep_screenshot else None
             return self._read_board_from_array(
                 board_array,
@@ -604,6 +604,11 @@ def dialog_button_matches(text: str, option: str) -> bool:
 
 def grid_bbox(grid: Grid) -> tuple[int, int, int, int]:
     return grid.x_lines[0], grid.y_lines[0], grid.x_lines[-1] + 1, grid.y_lines[-1] + 1
+
+
+def crop_grid_array(array: np.ndarray, grid: Grid) -> np.ndarray:
+    x0, y0, x1, y1 = grid_bbox(grid)
+    return array[y0:y1, x0:x1].copy()
 
 
 def offset_grid(grid: Grid, dx: int, dy: int) -> Grid:

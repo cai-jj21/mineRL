@@ -63,6 +63,15 @@ def test_classify_cell_fast_keeps_blue_hidden_cells_hidden() -> None:
     assert cell["kind"] == "hidden"
 
 
+def test_crop_grid_array_uses_numpy_axis_order() -> None:
+    array = np.arange(6 * 8 * 3, dtype=np.uint8).reshape((6, 8, 3))
+    grid = windows_agent.Grid(x_lines=[2, 5], y_lines=[1, 4])
+
+    crop = windows_agent.crop_grid_array(array, grid)
+
+    np.testing.assert_array_equal(crop, array[1:5, 2:6])
+
+
 def test_read_board_from_array_reuses_unchanged_cells() -> None:
     cell_w = 24
     cell_h = 24
@@ -79,6 +88,7 @@ def test_read_board_from_array_reuses_unchanged_cells() -> None:
             y_lines=[i * cell_h for i in range(windows_agent.ROWS + 1)],
         ),
         screenshot=Image.fromarray(prev_array, mode="RGB"),
+        pixels=prev_array,
     )
 
     board = windows_agent.WindowsMinesweeper._read_board_from_array(
@@ -86,6 +96,7 @@ def test_read_board_from_array_reuses_unchanged_cells() -> None:
         board_array,
         prev_board.grid,
         Image.fromarray(board_array, mode="RGB"),
+        board_array,
         0,
         prev_board,
     )
