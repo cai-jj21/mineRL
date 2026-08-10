@@ -52,6 +52,8 @@ class TrainingConfig:
     grad_clip: float = 1.0
     hidden_channels: int = 64
     residual_blocks: int = 3
+    global_policy_context: bool = False
+    long_range_context: bool = False
     eval_every: int = 100
     eval_games: int = 50
     pretrain_episodes: int = 0
@@ -63,6 +65,7 @@ class TrainingConfig:
     dagger_batch_size: int = 256
     dagger_updates_per_episode: int = 1
     guess_supervision_topk: int = 5
+    guess_imitation_weight: float = 1.0
     exploration_temperature: float = 1.0
     exploration_topk: int = 0
     inference_augment_flips: bool = False
@@ -70,6 +73,8 @@ class TrainingConfig:
     augment_flips: bool = True
     decision_actions: str = "open"
     risk_weight: float = 0.0
+    risk_head_coef: float = 0.0
+    risk_head_weight: float = 0.0
     max_steps: int = 2000
     device: str = "cpu"
 
@@ -162,6 +167,8 @@ class MinesweeperTrainer:
         self.model = MinesweeperNet(
             hidden_channels=config.hidden_channels,
             residual_blocks=config.residual_blocks,
+            global_policy_context=config.global_policy_context,
+            long_range_context=config.long_range_context,
         ).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.lr)
         self.rng = np.random.default_rng(config.seed)
@@ -242,6 +249,7 @@ class MinesweeperTrainer:
                     expert_action_mask=expert_action_mask,
                     mine_mask=mine_mask,
                     risk_map=risk_map,
+                    expert_is_guess=bool(snapshot is not None and not snapshot.has_forced_moves),
                 )
             )
 
@@ -311,7 +319,15 @@ class MinesweeperTrainer:
                 if expert_action_mask is None or not expert_action_mask.any():
                     break
                 action_index = int(np.flatnonzero(expert_action_mask.reshape(-1))[0])
-                reward = self._apply_expert_action(game, transitions, board, global_features, action_mask, action_index)
+                reward = self._apply_expert_action(
+                    game,
+                    transitions,
+                    board,
+                    global_features,
+                    action_mask,
+                    action_index,
+                    expert_is_guess=False,
+                )
                 total_reward += reward
                 expert_steps += 1
                 continue
@@ -345,6 +361,7 @@ class MinesweeperTrainer:
                     action_index,
                     current_expert_mask,
                     snapshot.risk_map,
+                    expert_is_guess=False,
                 )
                 total_reward += reward
                 expert_steps += 1
@@ -364,6 +381,7 @@ class MinesweeperTrainer:
                 action_index,
                 _single_action_mask(action_mask, action_index),
                 snapshot.risk_map,
+                expert_is_guess=not snapshot.has_forced_moves,
             )
             total_reward += reward
             expert_steps += 1
@@ -387,6 +405,7 @@ class MinesweeperTrainer:
         action_index: int,
         expert_action_mask: np.ndarray | None = None,
         risk_map: np.ndarray | None = None,
+        expert_is_guess: bool = False,
     ) -> float:
         mine_mask = game.mines.copy() if game.mines_placed else None
         action = decode_action_index(action_index, game.rows, game.cols)
@@ -403,6 +422,7 @@ class MinesweeperTrainer:
                 expert_action_mask=expert_action_mask,
                 mine_mask=mine_mask,
                 risk_map=risk_map,
+                expert_is_guess=expert_is_guess,
             )
         )
         return float(reward)
@@ -553,7 +573,7 @@ class MinesweeperTrainer:
         actions = torch.tensor([t.action_index for t in transitions], dtype=torch.long, device=self.device)
         returns = self._discounted_returns([t.reward for t in transitions]).to(self.device)
 
-        logits, values = self.model(boards, global_features)
+        logits, values, risk_logits = self.model.forward_with_risk(boards, global_features)
         flat_logits = logits.view(logits.shape[0], -1)
         flat_masks = masks.view(masks.shape[0], -1)
         masked_logits = flat_logits.masked_fill(~flat_masks, -1e9)
@@ -572,8 +592,10 @@ class MinesweeperTrainer:
         loss = loss + (self.config.solver_imitation_coef if imitation_coef is None else imitation_coef) * solver_imitation_loss
         mine_aux_loss = self._mine_auxiliary_loss(logits, masks, transitions)
         risk_supervision_loss = self._risk_supervision_loss(logits, masks, transitions)
+        risk_head_loss = self._risk_head_loss(risk_logits, masks, transitions)
         loss = loss + self.config.mine_aux_coef * mine_aux_loss
         loss = loss + self.config.risk_supervision_coef * risk_supervision_loss
+        loss = loss + self.config.risk_head_coef * risk_head_loss
         loss = loss - self.config.entropy_coef * entropy
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -588,6 +610,7 @@ class MinesweeperTrainer:
             "solver_imitation_loss": float(solver_imitation_loss.detach().cpu()),
             "mine_aux_loss": float(mine_aux_loss.detach().cpu()),
             "risk_supervision_loss": float(risk_supervision_loss.detach().cpu()),
+            "risk_head_loss": float(risk_head_loss.detach().cpu()),
             "entropy": float(entropy.detach().cpu()),
         }
 
@@ -600,16 +623,18 @@ class MinesweeperTrainer:
             device=self.device,
         )
         masks = torch.tensor(np.stack([t.action_mask for t in transitions]), dtype=torch.bool, device=self.device)
-        logits, values = self.model(boards, global_features)
+        logits, values, risk_logits = self.model.forward_with_risk(boards, global_features)
         flat_logits = logits.view(logits.shape[0], -1)
         flat_masks = masks.view(masks.shape[0], -1)
         masked_logits = flat_logits.masked_fill(~flat_masks, -1e9)
         imitation_loss = self._expert_policy_loss(masked_logits, transitions, allow_action_fallback=True)
         mine_aux_loss = self._mine_auxiliary_loss(logits, masks, transitions)
         risk_supervision_loss = self._risk_supervision_loss(logits, masks, transitions)
+        risk_head_loss = self._risk_head_loss(risk_logits, masks, transitions)
         loss = imitation_loss * self.config.pretrain_imitation_coef
         loss = loss + self.config.mine_aux_coef * mine_aux_loss
         loss = loss + self.config.risk_supervision_coef * risk_supervision_loss
+        loss = loss + self.config.risk_head_coef * risk_head_loss
         entropy = Categorical(logits=masked_logits).entropy().mean()
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -624,6 +649,7 @@ class MinesweeperTrainer:
             "solver_imitation_loss": float(imitation_loss.detach().cpu()),
             "mine_aux_loss": float(mine_aux_loss.detach().cpu()),
             "risk_supervision_loss": float(risk_supervision_loss.detach().cpu()),
+            "risk_head_loss": float(risk_head_loss.detach().cpu()),
             "entropy": float(entropy.detach().cpu()),
         }
 
@@ -633,19 +659,38 @@ class MinesweeperTrainer:
         transitions: list[EpisodeTransition],
         allow_action_fallback: bool,
     ) -> torch.Tensor:
-        expert_masks = torch.tensor(
-            np.stack([_transition_expert_mask(transition, allow_action_fallback) for transition in transitions]),
-            dtype=torch.bool,
+        expert_weights = torch.tensor(
+            np.stack(
+                [
+                    _expert_action_weights(
+                        transition,
+                        risk_temperature=self.config.risk_temperature,
+                        allow_action_fallback=allow_action_fallback,
+                    )
+                    for transition in transitions
+                ]
+            ),
+            dtype=torch.float32,
             device=self.device,
         ).view(masked_logits.shape[0], -1)
-        valid_rows = expert_masks.any(dim=1)
+        valid_rows = expert_weights.sum(dim=1) > 0.0
         if not bool(valid_rows.any()):
             return masked_logits.new_tensor(0.0)
 
-        targets = expert_masks[valid_rows].float()
+        targets = expert_weights[valid_rows]
         targets = targets / targets.sum(dim=1, keepdim=True).clamp_min(1.0)
         log_probs = F.log_softmax(masked_logits[valid_rows], dim=1)
-        return -(targets * log_probs).sum(dim=1).mean()
+        row_losses = -(targets * log_probs).sum(dim=1)
+        row_weights = torch.tensor(
+            [
+                self.config.guess_imitation_weight if transition.expert_is_guess else 1.0
+                for transition, valid in zip(transitions, valid_rows.detach().cpu().tolist())
+                if valid
+            ],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        return (row_losses * row_weights).sum() / row_weights.sum().clamp_min(1.0)
 
     def _zero_losses(self) -> dict[str, float]:
         return {
@@ -656,6 +701,7 @@ class MinesweeperTrainer:
             "dagger_loss": 0.0,
             "mine_aux_loss": 0.0,
             "risk_supervision_loss": 0.0,
+            "risk_head_loss": 0.0,
             "entropy": 0.0,
         }
 
@@ -703,13 +749,6 @@ class MinesweeperTrainer:
             return logits.new_tensor(0.0)
 
         open_channel = action_channel(ActionType.OPEN)
-        cells = self.config.rows * self.config.cols
-        expert_actions = torch.tensor(
-            [transition.expert_action_index if transition.expert_action_index is not None else transition.action_index for transition in transitions],
-            dtype=torch.long,
-            device=self.device,
-        )
-        expert_kinds = expert_actions // cells
         risk_maps = torch.tensor(
             np.stack(
                 [
@@ -727,12 +766,12 @@ class MinesweeperTrainer:
             dtype=torch.bool,
             device=self.device,
         )
-        guess_mask = risk_valid & (expert_kinds == open_channel)
+        open_masks = masks[:, open_channel, :, :].view(masks.shape[0], -1)
+        guess_mask = risk_valid & open_masks.any(dim=1)
         if not bool(guess_mask.any()):
             return logits.new_tensor(0.0)
 
         open_logits = logits[:, open_channel, :, :].view(logits.shape[0], -1)
-        open_masks = masks[:, open_channel, :, :].view(masks.shape[0], -1)
         selected_logits = open_logits[guess_mask].masked_fill(~open_masks[guess_mask], -1e9)
         selected_risk = risk_maps[guess_mask].view(risk_maps[guess_mask].shape[0], -1).masked_fill(
             ~open_masks[guess_mask],
@@ -741,6 +780,43 @@ class MinesweeperTrainer:
         target = torch.softmax(-selected_risk / max(self.config.risk_temperature, 1e-6), dim=1)
         log_probs = F.log_softmax(selected_logits, dim=1)
         return -(target * log_probs).sum(dim=1).mean()
+
+    def _risk_head_loss(
+        self,
+        risk_logits: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        if self.config.risk_head_coef <= 0.0:
+            return risk_logits.new_tensor(0.0)
+
+        risk_targets = torch.tensor(
+            np.stack(
+                [
+                    np.zeros((self.config.rows, self.config.cols), dtype=np.float32)
+                    if transition.mine_mask is None and transition.risk_map is None
+                    else (
+                        transition.mine_mask.astype(np.float32)
+                        if transition.mine_mask is not None
+                        else transition.risk_map.astype(np.float32)
+                    )
+                    for transition in transitions
+                ]
+            ),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        target_valid = torch.tensor(
+            [transition.mine_mask is not None or transition.risk_map is not None for transition in transitions],
+            dtype=torch.bool,
+            device=self.device,
+        ).view(-1, 1, 1)
+        open_mask = masks[:, action_channel(ActionType.OPEN), :, :]
+        valid = target_valid & open_mask
+        if not bool(valid.any()):
+            return risk_logits.new_tensor(0.0)
+
+        return F.binary_cross_entropy_with_logits(risk_logits[:, 0][valid], risk_targets[valid])
 
     def _sample_transitions(
         self,
@@ -795,7 +871,12 @@ class MinesweeperTrainer:
                     use_flip_ensemble=True,
                 )
             else:
-                logits = self._predict_policy_logits(board, global_features, use_flip_ensemble=use_flip_ensemble)
+                logits, risk_logits = self._predict_policy_risk_logits_batch(
+                    boards=np.stack([board]),
+                    global_features_batch=np.stack([global_features]),
+                    use_flip_ensemble=use_flip_ensemble,
+                )
+                logits = self._apply_model_risk_prior(logits, risk_logits)
                 if mode == "hybrid":
                     logits = self._apply_solver_risk_prior(logits, game, risk_weight)
                 flat_logits = logits.view(1, -1)
@@ -812,32 +893,60 @@ class MinesweeperTrainer:
         action_masks: np.ndarray,
         use_flip_ensemble: bool,
     ) -> torch.Tensor:
-        if not use_flip_ensemble or self.config.inference_ensemble == "logits":
-            logits = self._predict_policy_logits_batch(
+        flat_masks = torch.tensor(action_masks.reshape(boards.shape[0], -1), dtype=torch.bool, device=self.device)
+        if use_flip_ensemble and self.config.inference_ensemble == "probs":
+            policy_parts, risk_parts = self._predict_flip_policy_risk_parts(
                 boards=boards,
                 global_features_batch=global_features_batch,
-                use_flip_ensemble=use_flip_ensemble,
             )
-            flat_masks = torch.tensor(action_masks.reshape(boards.shape[0], -1), dtype=torch.bool, device=self.device)
-            return logits.view(boards.shape[0], -1).masked_fill(~flat_masks, -1e9)
+            probabilities = []
+            for policy_part, risk_part in zip(policy_parts, risk_parts):
+                adjusted = self._apply_model_risk_prior(policy_part, risk_part)
+                probabilities.append(
+                    F.softmax(adjusted.view(boards.shape[0], -1).masked_fill(~flat_masks, -1e9), dim=1)
+                )
+            return torch.stack(probabilities, dim=0).mean(dim=0).masked_fill(~flat_masks, -1.0)
 
-        parts = self._predict_flip_policy_logits_parts(boards=boards, global_features_batch=global_features_batch)
-        flat_masks = torch.tensor(action_masks.reshape(boards.shape[0], -1), dtype=torch.bool, device=self.device)
-        probabilities = [
-            F.softmax(part.view(boards.shape[0], -1).masked_fill(~flat_masks, -1e9), dim=1)
-            for part in parts
-        ]
-        return torch.stack(probabilities, dim=0).mean(dim=0).masked_fill(~flat_masks, -1.0)
+        logits, risk_logits = self._predict_policy_risk_logits_batch(
+            boards=boards,
+            global_features_batch=global_features_batch,
+            use_flip_ensemble=use_flip_ensemble,
+        )
+        adjusted = self._apply_model_risk_prior(logits, risk_logits)
+        return adjusted.view(boards.shape[0], -1).masked_fill(~flat_masks, -1e9)
 
-    def _predict_flip_policy_logits_parts(
+    def _predict_policy_risk_logits_batch(
         self,
         boards: np.ndarray,
         global_features_batch: np.ndarray,
-    ) -> list[torch.Tensor]:
+        use_flip_ensemble: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not use_flip_ensemble:
+            board_t = torch.tensor(boards, dtype=torch.float32, device=self.device)
+            global_t = torch.tensor(global_features_batch, dtype=torch.float32, device=self.device)
+            policy_logits, _, risk_logits = self.model.forward_with_risk(board_t, global_t)
+            return policy_logits, risk_logits
+
+        policy_parts, risk_parts = self._predict_flip_policy_risk_parts(
+            boards=boards,
+            global_features_batch=global_features_batch,
+        )
+        return torch.stack(policy_parts, dim=0).mean(dim=0), torch.stack(risk_parts, dim=0).mean(dim=0)
+
+    def _predict_flip_policy_risk_parts(
+        self,
+        boards: np.ndarray,
+        global_features_batch: np.ndarray,
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         transforms = [(False, False), (True, False), (False, True), (True, True)]
         transformed_boards = np.concatenate(
             [
-                np.stack([_flip_board(board, self.config.rows, self.config.cols, flip_vertical, flip_horizontal) for board in boards])
+                np.stack(
+                    [
+                        _flip_board(board, self.config.rows, self.config.cols, flip_vertical, flip_horizontal)
+                        for board in boards
+                    ]
+                )
                 for flip_vertical, flip_horizontal in transforms
             ],
             axis=0,
@@ -845,12 +954,41 @@ class MinesweeperTrainer:
         transformed_globals = np.concatenate([global_features_batch for _ in transforms], axis=0)
         board_t = torch.tensor(transformed_boards, dtype=torch.float32, device=self.device)
         global_t = torch.tensor(transformed_globals, dtype=torch.float32, device=self.device)
-        logits, _ = self.model(board_t, global_t)
-        logits_by_transform = logits.view(len(transforms), boards.shape[0], logits.shape[1], logits.shape[2], logits.shape[3])
-        return [
-            _unflip_policy_logits(logits_by_transform[index], flip_vertical, flip_horizontal)
+        policy_logits, _, risk_logits = self.model.forward_with_risk(board_t, global_t)
+        policy_by_transform = policy_logits.view(
+            len(transforms),
+            boards.shape[0],
+            policy_logits.shape[1],
+            policy_logits.shape[2],
+            policy_logits.shape[3],
+        )
+        risk_by_transform = risk_logits.view(
+            len(transforms),
+            boards.shape[0],
+            risk_logits.shape[1],
+            risk_logits.shape[2],
+            risk_logits.shape[3],
+        )
+        policy_parts = [
+            _unflip_policy_logits(policy_by_transform[index], flip_vertical, flip_horizontal)
             for index, (flip_vertical, flip_horizontal) in enumerate(transforms)
         ]
+        risk_parts = [
+            _unflip_policy_logits(risk_by_transform[index], flip_vertical, flip_horizontal)
+            for index, (flip_vertical, flip_horizontal) in enumerate(transforms)
+        ]
+        return policy_parts, risk_parts
+
+    def _predict_flip_policy_logits_parts(
+        self,
+        boards: np.ndarray,
+        global_features_batch: np.ndarray,
+    ) -> list[torch.Tensor]:
+        policy_parts, _ = self._predict_flip_policy_risk_parts(
+            boards=boards,
+            global_features_batch=global_features_batch,
+        )
+        return policy_parts
 
     def _predict_policy_logits(
         self,
@@ -883,6 +1021,20 @@ class MinesweeperTrainer:
             for index, _ in enumerate(transforms)
         ]
         return torch.stack(unflipped, dim=0).mean(dim=0)
+
+    def _apply_model_risk_prior(
+        self,
+        logits: torch.Tensor,
+        risk_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.config.risk_head_weight == 0.0:
+            return logits
+
+        risk = torch.sigmoid(risk_logits[:, 0, :, :])
+        adjusted = logits.clone()
+        adjusted[:, action_channel(ActionType.OPEN), :, :] -= self.config.risk_head_weight * risk
+        adjusted[:, action_channel(ActionType.FLAG), :, :] += self.config.risk_head_weight * risk
+        return adjusted
 
     def _exploration_logits(
         self,
@@ -1320,6 +1472,33 @@ def _transition_expert_mask(transition: EpisodeTransition, allow_action_fallback
     return _single_action_mask(transition.action_mask, transition.expert_action_index)
 
 
+def _expert_action_weights(
+    transition: EpisodeTransition,
+    risk_temperature: float,
+    allow_action_fallback: bool,
+) -> np.ndarray:
+    """Prefer lower-risk OPEN actions among the solver's candidate actions."""
+    expert_mask = _transition_expert_mask(transition, allow_action_fallback)
+    weights = expert_mask.astype(np.float32)
+    if transition.risk_map is None:
+        return weights
+
+    open_channel = action_channel(ActionType.OPEN)
+    open_mask = expert_mask[open_channel]
+    if not bool(open_mask.any()):
+        return weights
+
+    risk = transition.risk_map.astype(np.float32, copy=False)
+    finite_risk = risk[np.isfinite(risk) & open_mask]
+    if finite_risk.size == 0:
+        return weights
+    shifted_risk = risk - float(finite_risk.min())
+    temperature = max(float(risk_temperature), 1e-6)
+    open_weights = np.exp(-np.clip(shifted_risk / temperature, 0.0, 80.0)).astype(np.float32)
+    weights[open_channel] = open_weights * open_mask.astype(np.float32)
+    return weights
+
+
 def _flip_transition(
     transition: EpisodeTransition,
     rows: int,
@@ -1327,7 +1506,7 @@ def _flip_transition(
     flip_vertical: bool,
     flip_horizontal: bool,
 ) -> EpisodeTransition:
-    return EpisodeTransition(
+        return EpisodeTransition(
         board=_flip_board(transition.board, rows, cols, flip_vertical, flip_horizontal),
         global_features=transition.global_features.copy(),
         action_mask=_flip_spatial(transition.action_mask, flip_vertical, flip_horizontal),
@@ -1346,6 +1525,7 @@ def _flip_transition(
         risk_map=None
         if transition.risk_map is None
         else _flip_spatial(transition.risk_map, flip_vertical, flip_horizontal),
+        expert_is_guess=transition.expert_is_guess,
     )
 
 

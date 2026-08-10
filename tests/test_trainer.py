@@ -9,6 +9,7 @@ from minesweeper_rl.types import Action, ActionType, EpisodeTransition
 from minesweeper_rl.trainer import (
     MinesweeperTrainer,
     TrainingConfig,
+    _expert_action_weights,
     _flip_transition,
     evaluate_policy,
     evaluate_policy_batched,
@@ -53,6 +54,34 @@ def test_expert_episode_can_update_model() -> None:
     assert summary.game_steps > 0
     assert all(transition.expert_action_index == transition.action_index for transition in transitions)
     assert losses["solver_imitation_loss"] > 0.0
+
+
+def test_expert_action_weights_prefer_lower_risk_open_cells() -> None:
+    rows, cols = 2, 3
+    action_mask = np.zeros((4, rows, cols), dtype=bool)
+    action_mask[0] = True
+    expert_mask = np.zeros_like(action_mask)
+    expert_mask[0, 0, 0] = True
+    expert_mask[0, 0, 1] = True
+    risk_map = np.full((rows, cols), 0.9, dtype=np.float32)
+    risk_map[0, 0] = 0.1
+    risk_map[0, 1] = 0.4
+    transition = EpisodeTransition(
+        board=np.zeros((1, rows, cols), dtype=np.float32),
+        global_features=np.zeros(1, dtype=np.float32),
+        action_mask=action_mask,
+        action_index=action_to_index(Action(ActionType.OPEN, 0, 0), rows, cols),
+        expert_action_index=None,
+        reward=0.0,
+        done=False,
+        expert_action_mask=expert_mask,
+        risk_map=risk_map,
+    )
+
+    weights = _expert_action_weights(transition, risk_temperature=0.1, allow_action_fallback=False)
+
+    assert weights[0, 0, 0] > weights[0, 0, 1] > 0.0
+    assert float(weights.sum()) > 0.0
 
 
 def test_training_expert_prioritizes_unflagging_wrong_flags() -> None:

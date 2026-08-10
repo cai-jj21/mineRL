@@ -14,3 +14,8 @@ def test_model_forward_shapes() -> None:
 
     assert logits.shape == (2, ACTION_CHANNELS, 16, 30)
     assert values.shape == (2,)
+
+    logits, values, risk_logits = model.forward_with_risk(board, global_features)
+    assert logits.shape == (2, ACTION_CHANNELS, 16, 30)
+    assert values.shape == (2,)
+    assert risk_logits.shape == (2, 1, 16, 30)

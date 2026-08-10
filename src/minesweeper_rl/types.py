@@ -66,6 +66,7 @@ class EpisodeTransition:
     expert_action_mask: np.ndarray | None = None
     mine_mask: np.ndarray | None = None
     risk_map: np.ndarray | None = None
+    expert_is_guess: bool = False
 
 
 @dataclass
