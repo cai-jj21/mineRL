@@ -1696,6 +1696,93 @@ def test_wait_for_fresh_board_closes_statistics_dialog(monkeypatch) -> None:
     assert desktop.closed
 
 
+def test_quick_number_board_after_open_updates_single_cell(monkeypatch) -> None:
+    grid = windows_agent.Grid(
+        x_lines=[index * 30 for index in range(windows_agent.COLS + 1)],
+        y_lines=[index * 30 for index in range(windows_agent.ROWS + 1)],
+    )
+    previous_pixels = np.zeros((windows_agent.ROWS * 30, windows_agent.COLS * 30, 3), dtype=np.uint8)
+    previous = windows_agent.ScreenBoard(
+        revealed=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        flagged=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        adjacent=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=np.int8),
+        mine_like=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        grid=grid,
+        screenshot=None,
+        pixels=previous_pixels,
+    )
+    fake_grid = grid
+
+    class FakeDesktop:
+        grid = fake_grid
+
+        def capture_region_array(self, left: int, top: int, right: int, bottom: int) -> np.ndarray:
+            assert (left, top, right, bottom) == grid.crop_box(4, 5)
+            return np.full((bottom - top, right - left, 3), 220, dtype=np.uint8)
+
+    monkeypatch.setattr(
+        windows_agent,
+        "classify_cell_fast",
+        lambda array: {"kind": "revealed", "number": 3},
+    )
+
+    board, info = windows_agent.quick_number_board_after_open(
+        FakeDesktop(),
+        previous,
+        windows_agent.Action(windows_agent.ActionType.OPEN, 4, 5),
+        step_count=7,
+        keep_screenshot=False,
+    )
+
+    assert board is not None
+    assert info["accepted"]
+    assert board.revealed[4, 5]
+    assert board.adjacent[4, 5] == 3
+    assert not previous.revealed[4, 5]
+    assert board.read_timing["mode"] == "quick_number"
+    assert board.step_count == 7
+
+
+def test_quick_number_board_after_open_falls_back_on_zero(monkeypatch) -> None:
+    grid = windows_agent.Grid(
+        x_lines=[index * 30 for index in range(windows_agent.COLS + 1)],
+        y_lines=[index * 30 for index in range(windows_agent.ROWS + 1)],
+    )
+    previous = windows_agent.ScreenBoard(
+        revealed=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        flagged=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        adjacent=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=np.int8),
+        mine_like=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        grid=grid,
+        screenshot=None,
+        pixels=np.zeros((windows_agent.ROWS * 30, windows_agent.COLS * 30, 3), dtype=np.uint8),
+    )
+    fake_grid = grid
+
+    class FakeDesktop:
+        grid = fake_grid
+
+        def capture_region_array(self, left: int, top: int, right: int, bottom: int) -> np.ndarray:
+            return np.zeros((bottom - top, right - left, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(
+        windows_agent,
+        "classify_cell_fast",
+        lambda array: {"kind": "revealed", "number": 0},
+    )
+
+    board, info = windows_agent.quick_number_board_after_open(
+        FakeDesktop(),
+        previous,
+        windows_agent.Action(windows_agent.ActionType.OPEN, 2, 3),
+        step_count=1,
+        keep_screenshot=False,
+    )
+
+    assert board is None
+    assert info["reason"] == "zero_or_ambiguous_reveal"
+
+
 def test_click_action_verifies_cursor_then_parks_cursor(monkeypatch) -> None:
     events: list[object] = []
 
@@ -2144,6 +2231,120 @@ def test_play_game_default_path_does_not_apply_safety_filters(monkeypatch, tmp_p
     assert "basic_safety_filter" not in trace["actions"][0]
     assert "solver_safety_filter" not in trace["actions"][0]
     assert "basic_audit" not in trace["actions"][0]
+
+
+def test_play_game_quick_number_read_skips_full_readback(monkeypatch, tmp_path: Path) -> None:
+    grid = windows_agent.Grid(
+        x_lines=[index * 30 for index in range(windows_agent.COLS + 1)],
+        y_lines=[index * 30 for index in range(windows_agent.ROWS + 1)],
+    )
+    initial = windows_agent.ScreenBoard(
+        revealed=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        flagged=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        adjacent=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=np.int8),
+        mine_like=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool),
+        grid=grid,
+        screenshot=None,
+        pixels=np.zeros((windows_agent.ROWS * 30, windows_agent.COLS * 30, 3), dtype=np.uint8),
+    )
+    fake_grid = grid
+
+    class FakeDesktop:
+        capture_backend = "auto"
+        grid = fake_grid
+
+        def dialog_is_open(self) -> bool:
+            return False
+
+        def effective_click_method(self) -> str:
+            return "mouse_event"
+
+        def capture_region_array(self, left: int, top: int, right: int, bottom: int) -> np.ndarray:
+            return np.full((bottom - top, right - left, 3), 220, dtype=np.uint8)
+
+        def click_action(self, action):
+            return {
+                "row": int(action.row),
+                "col": int(action.col),
+                "kind": action.kind.value,
+                "issued": True,
+                "cursor_ready": True,
+                "method": "mouse_event",
+            }
+
+    class FakeTrainer:
+        config = Namespace(exact_limit=24)
+
+        def _decision_action_mask(self, action_mask):
+            return action_mask
+
+        def _select_action(self, **kwargs):
+            return windows_agent.action_to_index(
+                windows_agent.Action(windows_agent.ActionType.OPEN, 0, 0),
+                windows_agent.ROWS,
+                windows_agent.COLS,
+            )
+
+    reads = [initial]
+
+    def fake_read_stable_board(*args, **kwargs):
+        if not reads:
+            raise AssertionError("quick number read should skip full readback")
+        return reads.pop(0)
+
+    monkeypatch.setattr(windows_agent, "prepare_game_start", lambda desktop, start_mode: False)
+    monkeypatch.setattr(windows_agent, "read_stable_board", fake_read_stable_board)
+    monkeypatch.setattr(windows_agent, "classify_cell_fast", lambda array: {"kind": "revealed", "number": 2})
+    monkeypatch.setattr(windows_agent.time, "sleep", lambda seconds: None)
+
+    args = Namespace(
+        checkpoint=Path("artifacts/full_rlmix_20.pt"),
+        capture_backend="auto",
+        read_mode="fast",
+        click_method="mouse_event",
+        flag_mode="memory",
+        no_persistent_reveals=True,
+        quick_number_read=True,
+        audit_solver=False,
+        audit_basic=False,
+        basic_safety_filter="none",
+        solver_safety_filter="none",
+        solver_assist="none",
+        solver_exact_limit=None,
+        solver_batch_size=1,
+        clear_stop_on_start=False,
+        start_mode="current",
+        max_steps=1,
+        record_frames="none",
+        no_final_images=True,
+        stall_limit=20,
+    )
+
+    result = windows_agent.play_game(
+        args,
+        game_index=1,
+        output_dir=tmp_path,
+        desktop=FakeDesktop(),
+        trainer=FakeTrainer(),
+        timing={
+            "capture_delay": 0.0,
+            "action_delay": 0.0,
+            "settle_reads": 1,
+            "settle_read_delay": 0.0,
+            "no_progress_reclicks": 0,
+            "click_confirm_retries": 1,
+            "reclick_delay": 0.0,
+            "click_pause": 0.0,
+            "cursor_settle": 0.0,
+            "post_click_settle": 0.0,
+        },
+    )
+
+    action_record = json.loads(Path(result["path"]).read_text(encoding="utf-8"))["actions"][0]
+    assert action_record["quick_number_read"]["accepted"]
+    assert action_record["target_revealed_after_open"]
+    assert result["summary"]["quick_number_read_actions"] == 1
+    assert result["summary"]["quick_number_read_fallbacks"] == 0
 
 
 def test_play_game_blocks_unconfirmed_open_in_simulated_desktop(monkeypatch, tmp_path: Path) -> None:

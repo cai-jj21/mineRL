@@ -152,6 +152,7 @@ BASE_DEFAULTS: dict[str, Any] = {
     "solver_assist": "none",
     "solver_exact_limit": None,
     "solver_batch_size": 1,
+    "quick_number_read": False,
 }
 
 COMMAND_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -3252,21 +3253,33 @@ def play_game(
 
         before_raw_board = latest_raw_board
         read_started_at = time.time()
-        try:
-            after_raw_board = read_stable_board(
-                desktop,
+        quick_read_info: dict[str, Any] | None = None
+        after_raw_board: ScreenBoard | None = None
+        if bool(getattr(args, "quick_number_read", False)) and action.kind == ActionType.OPEN:
+            after_raw_board, quick_read_info = quick_number_board_after_open(
+                desktop=desktop,
+                previous_board=before_raw_board,
+                action=action,
                 step_count=step + 1,
                 keep_screenshot=keep_screenshot,
-                reads=settle_reads,
-                delay=settle_read_delay,
-                previous_board=before_raw_board,
             )
-        except RuntimeError:
-            terminal_dialog = desktop.dialog_title()
-            action_record["terminal_dialog"] = terminal_dialog
-            action_record["terminal_detected_at"] = "after_click_read"
-            actions.append(action_record)
-            break
+            action_record["quick_number_read"] = quick_read_info
+        if after_raw_board is None:
+            try:
+                after_raw_board = read_stable_board(
+                    desktop,
+                    step_count=step + 1,
+                    keep_screenshot=keep_screenshot,
+                    reads=settle_reads,
+                    delay=settle_read_delay,
+                    previous_board=before_raw_board,
+                )
+            except RuntimeError:
+                terminal_dialog = desktop.dialog_title()
+                action_record["terminal_dialog"] = terminal_dialog
+                action_record["terminal_detected_at"] = "after_click_read"
+                actions.append(action_record)
+                break
         action_record["after_read_elapsed"] = time.time() - read_started_at
         if after_raw_board.read_timing is not None:
             action_record["read_timing"] = after_raw_board.read_timing
@@ -3600,6 +3613,119 @@ def read_stable_board(
     result = best_board if read_quality_key(best_board) >= read_quality_key(board) else board
     result.read_timing = timing
     return result
+
+
+def quick_number_board_after_open(
+    desktop: WindowsMinesweeper,
+    previous_board: ScreenBoard | None,
+    action: Action,
+    step_count: int,
+    keep_screenshot: bool,
+) -> tuple[ScreenBoard | None, dict[str, Any]]:
+    info: dict[str, Any] = {"attempted": True, "mode": "quick_number"}
+    if action.kind != ActionType.OPEN:
+        info["reason"] = "not_open_action"
+        return None, info
+    if previous_board is None:
+        info["reason"] = "missing_previous_board"
+        return None, info
+    if previous_board.pixels is None:
+        info["reason"] = "missing_previous_pixels"
+        return None, info
+    if previous_board.revealed[action.row, action.col] or previous_board.flagged[action.row, action.col]:
+        info["reason"] = "target_not_hidden"
+        return None, info
+    screen_grid = getattr(desktop, "grid", None)
+    if screen_grid is None:
+        info["reason"] = "missing_screen_grid"
+        return None, info
+
+    try:
+        screen_box = screen_grid.crop_box(action.row, action.col)
+        local_box = previous_board.grid.crop_box(action.row, action.col)
+        capture_started_at = time.perf_counter()
+        crop = desktop.capture_region_array(*screen_box)
+        capture_elapsed = time.perf_counter() - capture_started_at
+        classify_started_at = time.perf_counter()
+        cell = classify_cell_fast(crop)
+        classify_elapsed = time.perf_counter() - classify_started_at
+    except Exception as exc:
+        info["reason"] = "capture_or_classify_error"
+        info["error"] = f"{type(exc).__name__}: {exc}"
+        return None, info
+
+    info["screen_box"] = [int(value) for value in screen_box]
+    info["cell_kind"] = cell.get("kind")
+    info["cell_number"] = int(cell.get("number", 0) or 0)
+    info["capture_seconds"] = capture_elapsed
+    info["classification_seconds"] = classify_elapsed
+    if cell.get("kind") != "revealed":
+        info["reason"] = "target_not_revealed"
+        return None, info
+    number = int(cell.get("number", 0) or 0)
+    if number <= 0:
+        info["reason"] = "zero_or_ambiguous_reveal"
+        return None, info
+    if number > max_neighbor_count(action.row, action.col):
+        info["reason"] = "impossible_number"
+        return None, info
+
+    revealed = previous_board.revealed.copy()
+    flagged = previous_board.flagged.copy()
+    adjacent = previous_board.adjacent.copy()
+    mine_like = previous_board.mine_like.copy()
+    revealed[action.row, action.col] = True
+    flagged[action.row, action.col] = False
+    adjacent[action.row, action.col] = number
+    mine_like[action.row, action.col] = False
+
+    pixels = previous_board.pixels.copy()
+    lx0, ly0, lx1, ly1 = (int(value) for value in local_box)
+    target_h = max(0, ly1 - ly0)
+    target_w = max(0, lx1 - lx0)
+    if (
+        target_h > 0
+        and target_w > 0
+        and 0 <= ly0 < ly1 <= pixels.shape[0]
+        and 0 <= lx0 < lx1 <= pixels.shape[1]
+        and crop.shape[0] >= target_h
+        and crop.shape[1] >= target_w
+    ):
+        pixels[ly0:ly1, lx0:lx1] = crop[:target_h, :target_w]
+        info["pixels_updated"] = True
+    else:
+        info["pixels_updated"] = False
+
+    repairs = repair_impossible_numbers(revealed, adjacent, mine_like)
+    if repairs:
+        info["reason"] = "repair_needed"
+        info["read_repairs"] = int(repairs)
+        return None, info
+
+    board = ScreenBoard(
+        revealed=revealed,
+        flagged=flagged,
+        adjacent=adjacent,
+        mine_like=mine_like,
+        grid=previous_board.grid,
+        screenshot=previous_board.screenshot if keep_screenshot else None,
+        pixels=pixels,
+        step_count=step_count,
+        read_repairs=0,
+        read_restores=0,
+        read_recoveries=0,
+    )
+    board.read_timing = {
+        "mode": "quick_number",
+        "capture_path": "cell_region",
+        "capture_seconds": capture_elapsed,
+        "classification_seconds": classify_elapsed,
+        "total_seconds": capture_elapsed + classify_elapsed,
+        "target_number": number,
+    }
+    info["accepted"] = True
+    info["reason"] = "accepted"
+    return board, info
 
 
 def read_quality_key(board: ScreenBoard) -> tuple[int, int, int, int]:
@@ -4147,6 +4273,11 @@ def summary_from_board(
     click_elapsed = [float(click.get("elapsed_seconds", 0.0)) for click in click_records if click]
     read_elapsed = [float(action.get("after_read_elapsed", 0.0)) for action in actions if action.get("after_read_elapsed") is not None]
     confirm_elapsed = [float(action.get("open_confirm_elapsed", 0.0)) for action in actions if action.get("open_confirm_elapsed") is not None]
+    quick_number_records = [
+        action.get("quick_number_read", {})
+        for action in actions
+        if action.get("quick_number_read")
+    ]
     open_revealed_delta = [int(action.get("revealed_delta", 0)) for action in physical_open_actions]
     open_effects = [action.get("open_effect", {}) for action in physical_open_actions if action.get("open_effect")]
     first_open_action = physical_open_actions[0] if physical_open_actions else None
@@ -4183,6 +4314,8 @@ def summary_from_board(
         "avg_click_seconds": (sum(click_elapsed) / len(click_elapsed)) if click_elapsed else 0.0,
         "avg_after_read_seconds": (sum(read_elapsed) / len(read_elapsed)) if read_elapsed else 0.0,
         "avg_confirm_seconds": (sum(confirm_elapsed) / len(confirm_elapsed)) if confirm_elapsed else 0.0,
+        "quick_number_read_actions": sum(1 for record in quick_number_records if record.get("accepted")),
+        "quick_number_read_fallbacks": sum(1 for record in quick_number_records if not record.get("accepted")),
         "open_confirm_reads": sum(int(confirm.get("read_attempts", 0)) for confirm in confirm_records),
         "open_confirm_passive_reads": sum(int(confirm.get("passive_reads", 0)) for confirm in confirm_records),
         "open_confirm_reclicks": sum(int(confirm.get("reclicks", 0)) for confirm in confirm_records),
@@ -5220,6 +5353,12 @@ def main() -> None:
     parser.add_argument("--no-final-images", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--no-hotkey", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--no-persistent-reveals", action="store_true", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--quick-number-read",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="after an open, read only the target cell when it becomes a nonzero number",
+    )
     parser.add_argument("--audit-solver", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--audit-basic", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--basic-safety-filter", choices=["none", "avoid-known-mines"], default=argparse.SUPPRESS)
