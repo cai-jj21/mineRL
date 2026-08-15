@@ -18,9 +18,9 @@
 4. 打开 `MODEL_CARD.md`，说明最终策略输入输出、checkpoint、训练信号和限制。
 5. 打开 `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/per_game_summary.json`，展示 `longest_streak = 10`、区间 `747-756`、执行异常为 0。
 6. 运行证据校验命令，证明报告数字来自本地 JSON。
-7. 最后打开 `RESUME_PROJECT_CARD.md`，展示可以放进简历的 bullet 和面试回答。
+7. 最后打开 `INTERVIEW_QA.md` 和 `RESUME_PROJECT_CARD.md`，展示常见追问的回答边界，以及可以放进简历的 bullet。
 
-这条路线的好处是先给结果，再解释系统，再给证据，最后回到简历表达。
+这条路线的好处是先给结果，再解释系统，再给证据，最后用 `INTERVIEW_QA.md` 防守追问，并回到简历表达。
 
 ## 快速证据命令
 

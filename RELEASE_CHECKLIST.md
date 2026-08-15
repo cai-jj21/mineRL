@@ -33,6 +33,7 @@
 - [ ] README 首屏能直接看到项目目标、核心方法和当前结果。
 - [ ] `ARCHITECTURE.md` 能说明环境、模型、solver、Windows 执行层和证据链如何连接。
 - [ ] `DEMO_GUIDE.md` 能提供 30 秒开场、5 分钟演示路线、证据命令和回答边界。
+- [ ] `INTERVIEW_QA.md` 能集中回答 solver 边界、统计口径、十连胜证据和失败归因。
 - [ ] `ABLATION_STUDY.md` 能解释单模型、集成、Windows 执行层和失败诊断的对照证据。
 - [ ] `PROJECT_COMPLETION_AUDIT.md` 能逐项说明代码、实验、报告、简历材料和发布门禁是否具备证据。
 - [ ] `EVALUATION_PROTOCOL.md` 能定义内部仿真、Windows 桌面、十连胜和报告口径。
@@ -50,6 +51,7 @@
 - `README.md`
 - `ARCHITECTURE.md`
 - `ABLATION_STUDY.md`
+- `INTERVIEW_QA.md`
 - `PROJECT_COMPLETION_AUDIT.md`
 - `DEMO_GUIDE.md`
 - `EVALUATION_PROTOCOL.md`

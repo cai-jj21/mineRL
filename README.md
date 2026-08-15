@@ -194,6 +194,7 @@ python scripts/windows_minesweeper_agent.py stop
 - `WINDOWS_AGENT_RESULTS.md`：桌面实验结果记录。
 - `ARCHITECTURE.md`：系统分层、训练/执行链路、solver 边界和证据链总览。
 - `DEMO_GUIDE.md`：面试、答辩或 GitHub 展示时的演示路线、证据命令和回答边界。
+- `INTERVIEW_QA.md`：面试答辩问答，集中回答 solver 边界、统计口径、十连胜证据和失败归因。
 - `ABLATION_STUDY.md`：单模型、checkpoint 集成、Windows 执行层、失败诊断和 exact solver 深度的对照证据。
 - `EVALUATION_PROTOCOL.md`：内部仿真、Windows 桌面、十连胜和报告口径的统一评估协议。
 - `PROJECT_COMPLETION_AUDIT.md`：逐项映射代码、实验、报告、简历材料和发布门禁的完成度审计。
@@ -215,6 +216,8 @@ python scripts/windows_minesweeper_agent.py stop
 架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md)，用于快速理解环境、模型、solver、Windows 执行层和证据链如何连接。
 
 演示指南见 [DEMO_GUIDE.md](DEMO_GUIDE.md)，包含 30 秒开场、5 分钟演示路线、可运行证据命令和常见追问回答。
+
+面试答辩问答见 [INTERVIEW_QA.md](INTERVIEW_QA.md)，用于集中回答“这是不是 solver 代打”“为什么 Windows 最新为 39.60%”“十连胜证明什么”等追问。
 
 消融与对照研究见 [ABLATION_STUDY.md](ABLATION_STUDY.md)，用于回答“哪些设计有效、证据强弱如何、下一步为什么做残局训练”。
 

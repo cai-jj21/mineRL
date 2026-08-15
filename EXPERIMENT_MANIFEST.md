@@ -30,7 +30,7 @@
 | `artifacts/report_assets/ten_streak_review.md` | 2086 | `29f9bc01c12d5dc0146c9d51ec01a976cfb8bf8b525fd319d945f9fc654d25a2` |
 | `artifacts/report_assets/statistical_summary.json` | 2313 | `6467a10b1271ba1d3001d6b3d4ded908b4ebfaa14ca2801c3d3aba1a8a8d0284` |
 | `artifacts/report_assets/statistical_summary.md` | 1213 | `8ce68c21b23957e2fb594fdf854106e2a7ac2eb6a35fc22142cffe9f7e0d634c` |
-| `artifacts/report_assets/claim_audit.json` | 28090 | `f26e150fe046cb23f1c88491e09a5318d3fa6b995cff8ee7946415e06de1b9e6` |
+| `artifacts/report_assets/claim_audit.json` | 31038 | `ce359613ca7de70a45183cae32813d575b9b7cf22fd036bce3f095bab46eb571` |
 | `artifacts/report_assets/failure_analysis_summary.json` | 7603 | `9ad7adc44114117e495bf68e10b6122675d15ef021ed378a4f867c81934929ab` |
 | `FAILURE_ANALYSIS.md` | 3446 | `6ee06eee323829d0bd602b11d79de8ba0c292445635d738fcba7ad4d5d5544a4` |
 | `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/game_747.json` | 775234 | `81cd79343bd69ef93b7d98aaa8db2dc02fe03895595e1caeaac233d5700ef415` |
