@@ -206,6 +206,8 @@ python scripts/windows_minesweeper_agent.py stop
 
 ## 报告与简历
 
+一页式项目总览见 [PROJECT_ONE_PAGER.md](PROJECT_ONE_PAGER.md)，适合 GitHub 首页浏览、面试开场或投递材料快速预览。
+
 完整项目报告见 [PROJECT_REPORT.md](PROJECT_REPORT.md)。报告包含问题定义、方法、训练信号、实验设置、十连胜复盘、局限性和简历表述建议。
 
 架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md)，用于快速理解环境、模型、solver、Windows 执行层和证据链如何连接。

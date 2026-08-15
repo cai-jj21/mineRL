@@ -13,6 +13,7 @@ DEFAULT_OUTPUT = Path("artifacts/report_assets/claim_audit.json")
 
 CLAIM_FILES = [
     Path("README.md"),
+    Path("PROJECT_ONE_PAGER.md"),
     Path("PROJECT_REPORT.md"),
     Path("RESUME_PROJECT_CARD.md"),
     Path("MODEL_CARD.md"),
@@ -169,6 +170,13 @@ def check_required_current_claims(root: Path, stats: dict[str, Any]) -> list[Cla
             report_percent(experiments["Windows desktop ensemble"]["win_rate"]),
             "495 个完成局",
             "952 个完成局",
+        ],
+        Path("PROJECT_ONE_PAGER.md"): [
+            report_percent(experiments["Internal RL ensemble"]["win_rate"]),
+            report_percent(experiments["Windows desktop single RL"]["win_rate"]),
+            report_percent(experiments["Windows desktop ensemble"]["win_rate"]),
+            "495 完成局",
+            "952 完成局",
         ],
         Path("RESUME_PROJECT_CARD.md"): [
             report_percent(experiments["Internal RL ensemble"]["win_rate"]),
