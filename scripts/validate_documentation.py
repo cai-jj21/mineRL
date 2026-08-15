@@ -12,6 +12,7 @@ from typing import Any
 REQUIRED_FILES = [
     Path("README.md"),
     Path("ARCHITECTURE.md"),
+    Path("ABLATION_STUDY.md"),
     Path("DEMO_GUIDE.md"),
     Path("EVALUATION_PROTOCOL.md"),
     Path("PROJECT_ONE_PAGER.md"),
@@ -38,6 +39,7 @@ REQUIRED_FILES = [
 REQUIRED_MENTIONS = {
     "README.md": [
         "ARCHITECTURE.md",
+        "ABLATION_STUDY.md",
         "DEMO_GUIDE.md",
         "EVALUATION_PROTOCOL.md",
         "PROJECT_ONE_PAGER.md",
@@ -109,6 +111,7 @@ REQUIRED_MENTIONS = {
     ],
     "PROJECT_REPORT.md": [
         "ARCHITECTURE.md",
+        "ABLATION_STUDY.md",
         "DEMO_GUIDE.md",
         "EVALUATION_PROTOCOL.md",
         "MODEL_CARD.md",
@@ -137,6 +140,7 @@ REQUIRED_MENTIONS = {
     ],
     "RESUME_PROJECT_CARD.md": [
         "ARCHITECTURE.md",
+        "ABLATION_STUDY.md",
         "DEMO_GUIDE.md",
         "EVALUATION_PROTOCOL.md",
         "MODEL_CARD.md",
@@ -149,6 +153,7 @@ REQUIRED_MENTIONS = {
     ],
     "RELEASE_CHECKLIST.md": [
         "ARCHITECTURE.md",
+        "ABLATION_STUDY.md",
         "DEMO_GUIDE.md",
         "EVALUATION_PROTOCOL.md",
         "scripts/validate_documentation.py",

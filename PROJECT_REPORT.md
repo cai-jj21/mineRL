@@ -8,7 +8,7 @@
 
 项目定位不是传统规则 solver，而是“solver 辅助训练、RL 独立决策”的强化学习系统。最终验证路径中 solver 不参与动作选择。
 
-最终模型/集成策略的模型卡见 `MODEL_CARD.md`，评估口径见 `EVALUATION_PROTOCOL.md`，checkpoint 与本地实验产物说明见 `ARTIFACTS.md`，系统分层和证据链总览见 `ARCHITECTURE.md`。
+最终模型/集成策略的模型卡见 `MODEL_CARD.md`，消融与对照证据见 `ABLATION_STUDY.md`，评估口径见 `EVALUATION_PROTOCOL.md`，checkpoint 与本地实验产物说明见 `ARTIFACTS.md`，系统分层和证据链总览见 `ARCHITECTURE.md`。
 
 ## 研究目标
 
@@ -321,6 +321,7 @@ python scripts/summarize_failure_analysis.py
 - 项目入口：[README.md](README.md)
 - 架构总览：[ARCHITECTURE.md](ARCHITECTURE.md)
 - 演示指南：[DEMO_GUIDE.md](DEMO_GUIDE.md)
+- 消融与对照研究：[ABLATION_STUDY.md](ABLATION_STUDY.md)
 - 评估协议：[EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)
 - 简历项目卡：[RESUME_PROJECT_CARD.md](RESUME_PROJECT_CARD.md)
 - Windows 结果记录：[WINDOWS_AGENT_RESULTS.md](WINDOWS_AGENT_RESULTS.md)
