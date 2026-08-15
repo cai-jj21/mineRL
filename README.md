@@ -196,6 +196,7 @@ python scripts/windows_minesweeper_agent.py stop
 - `DEMO_GUIDE.md`：面试、答辩或 GitHub 展示时的演示路线、证据命令和回答边界。
 - `ABLATION_STUDY.md`：单模型、checkpoint 集成、Windows 执行层、失败诊断和 exact solver 深度的对照证据。
 - `EVALUATION_PROTOCOL.md`：内部仿真、Windows 桌面、十连胜和报告口径的统一评估协议。
+- `PROJECT_COMPLETION_AUDIT.md`：逐项映射代码、实验、报告、简历材料和发布门禁的完成度审计。
 - `PROJECT_REPORT.md`：科研项目报告。
 - `MODEL_CARD.md`：最终模型/集成策略的输入、输出、训练信号、评估结果和局限性。
 - `ARTIFACTS.md`：checkpoint、实验产物、哈希清单和归档策略说明。
@@ -216,6 +217,8 @@ python scripts/windows_minesweeper_agent.py stop
 演示指南见 [DEMO_GUIDE.md](DEMO_GUIDE.md)，包含 30 秒开场、5 分钟演示路线、可运行证据命令和常见追问回答。
 
 消融与对照研究见 [ABLATION_STUDY.md](ABLATION_STUDY.md)，用于回答“哪些设计有效、证据强弱如何、下一步为什么做残局训练”。
+
+完成度审计见 [PROJECT_COMPLETION_AUDIT.md](PROJECT_COMPLETION_AUDIT.md)，用于发布或投递前确认代码、实验、报告、简历材料和校验门禁都能互相证明。
 
 评估协议见 [EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)，定义胜率、连胜、速度、执行异常、样本量和报告边界。
 

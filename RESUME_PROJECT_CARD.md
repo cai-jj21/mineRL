@@ -85,6 +85,7 @@ A: 研究上是 solver-guided RL 与失败诊断；工程上是真实 Windows �
 - 架构总览：`ARCHITECTURE.md`
 - 演示指南：`DEMO_GUIDE.md`
 - 消融对照：`ABLATION_STUDY.md`
+- 完成度审计：`PROJECT_COMPLETION_AUDIT.md`
 - 评估协议：`EVALUATION_PROTOCOL.md`
 - 科研报告：`PROJECT_REPORT.md`
 - 模型卡：`MODEL_CARD.md`

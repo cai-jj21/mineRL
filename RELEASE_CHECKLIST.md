@@ -20,7 +20,7 @@
 - [ ] `python scripts/validate_project_evidence.py --output artifacts\report_assets\evidence_validation.json` 输出 `ok: true`。
 - [ ] `python scripts/build_artifact_manifest.py` 输出 `missing: []`。
 - [ ] `EXPERIMENT_MANIFEST.md` 记录了内部评估、Windows 汇总、报告图表、失败分析和 `game_747.json` 到 `game_756.json` 的 SHA-256。
-- [ ] `PROJECT_REPORT.md`、`ABLATION_STUDY.md`、`RESUME_PROJECT_CARD.md`、`WINDOWS_AGENT_RESULTS.md` 中的数字与 `artifacts/report_assets/experiment_summary.md` 一致。
+- [ ] `PROJECT_REPORT.md`、`ABLATION_STUDY.md`、`PROJECT_COMPLETION_AUDIT.md`、`RESUME_PROJECT_CARD.md`、`WINDOWS_AGENT_RESULTS.md` 中的数字与 `artifacts/report_assets/experiment_summary.md` 一致。
 
 ## 可复现性
 
@@ -34,6 +34,7 @@
 - [ ] `ARCHITECTURE.md` 能说明环境、模型、solver、Windows 执行层和证据链如何连接。
 - [ ] `DEMO_GUIDE.md` 能提供 30 秒开场、5 分钟演示路线、证据命令和回答边界。
 - [ ] `ABLATION_STUDY.md` 能解释单模型、集成、Windows 执行层和失败诊断的对照证据。
+- [ ] `PROJECT_COMPLETION_AUDIT.md` 能逐项说明代码、实验、报告、简历材料和发布门禁是否具备证据。
 - [ ] `EVALUATION_PROTOCOL.md` 能定义内部仿真、Windows 桌面、十连胜和报告口径。
 - [ ] `MODEL_CARD.md` 能说明最终模型、输入输出、solver 角色和局限性。
 - [ ] `ARTIFACTS.md` 能说明 checkpoint、`artifacts/`、哈希清单和归档策略。
@@ -49,6 +50,7 @@
 - `README.md`
 - `ARCHITECTURE.md`
 - `ABLATION_STUDY.md`
+- `PROJECT_COMPLETION_AUDIT.md`
 - `DEMO_GUIDE.md`
 - `EVALUATION_PROTOCOL.md`
 - `PROJECT_REPORT.md`

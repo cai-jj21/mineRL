@@ -33,9 +33,10 @@ def create_docs(root: Path, test_count: int = 147) -> None:
                 "[DEMO_GUIDE.md](DEMO_GUIDE.md)",
                 "[EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)",
                 "[PROJECT_ONE_PAGER.md](PROJECT_ONE_PAGER.md)",
+                "[PROJECT_COMPLETION_AUDIT.md](PROJECT_COMPLETION_AUDIT.md)",
                 "[REPRODUCIBILITY.md](REPRODUCIBILITY.md)",
                 "[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)",
-                "ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md PROJECT_ONE_PAGER.md PROJECT_REPORT.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md MODEL_CARD.md ARTIFACTS.md",
+                "ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md PROJECT_ONE_PAGER.md PROJECT_COMPLETION_AUDIT.md PROJECT_REPORT.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md MODEL_CARD.md ARTIFACTS.md",
                 "EXPERIMENT_MANIFEST.md RELEASE_CHECKLIST.md",
                 "scripts/validate_documentation.py",
                 "scripts/validate_release.py",
@@ -75,7 +76,7 @@ def create_docs(root: Path, test_count: int = 147) -> None:
     )
     write_text(
         root / "PROJECT_REPORT.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py 25 / 25 10 连胜 {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py 25 / 25 10 连胜 {test_count}",
     )
     write_text(
         root / "REPRODUCIBILITY.md",
@@ -90,11 +91,11 @@ def create_docs(root: Path, test_count: int = 147) -> None:
     )
     write_text(
         root / "RESUME_PROJECT_CARD.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md RELEASE_CHECKLIST.md scripts/validate_project_evidence.py scripts/build_artifact_manifest.py {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md RELEASE_CHECKLIST.md scripts/validate_project_evidence.py scripts/build_artifact_manifest.py {test_count}",
     )
     write_text(
         root / "RELEASE_CHECKLIST.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md scripts/validate_documentation.py scripts/validate_release.py scripts/validate_claims.py MODEL_CARD.md ARTIFACTS.md EXPERIMENT_MANIFEST.md FAILURE_ANALYSIS.md {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md scripts/validate_documentation.py scripts/validate_release.py scripts/validate_claims.py MODEL_CARD.md ARTIFACTS.md EXPERIMENT_MANIFEST.md FAILURE_ANALYSIS.md {test_count}",
     )
 
 
