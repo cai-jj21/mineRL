@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -61,7 +62,14 @@ class ClaimCheck:
     detail: str
 
 
+def configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def main() -> None:
+    configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Audit report and resume claims against current experiment evidence.")
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--stats-summary", type=Path, default=DEFAULT_STATS_SUMMARY)

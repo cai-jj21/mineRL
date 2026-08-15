@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,14 @@ DEFAULT_OUTPUT_MD = Path("EXPERIMENT_MANIFEST.md")
 DEFAULT_FAILURE_ANALYSIS_MD = Path("FAILURE_ANALYSIS.md")
 
 
+def configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def main() -> None:
+    configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Build a checksum manifest for report and experiment artifacts.")
     parser.add_argument("--candidate-eval", type=Path, default=DEFAULT_CANDIDATE_EVAL)
     parser.add_argument("--ensemble-eval", type=Path, default=DEFAULT_ENSEMBLE_EVAL)

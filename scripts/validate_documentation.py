@@ -201,7 +201,14 @@ class DocumentationCheck:
     detail: str
 
 
+def configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def main() -> None:
+    configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Validate local project documentation links and key evidence mentions.")
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--expected-tests", type=int, default=147)

@@ -52,7 +52,14 @@ class EvidenceCheck:
     detail: str
 
 
+def configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def main() -> None:
+    configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Validate the project report evidence against local JSON artifacts.")
     parser.add_argument("--candidate-eval", type=Path, default=DEFAULT_CANDIDATE_EVAL)
     parser.add_argument("--ensemble-eval", type=Path, default=DEFAULT_ENSEMBLE_EVAL)

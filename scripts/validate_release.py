@@ -49,7 +49,14 @@ class ReleaseCheckResult:
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
+def configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def main() -> None:
+    configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Run the release-level validation gate for the Minesweeper RL project.")
     parser.add_argument("--expected-tests", type=int, default=147)
     parser.add_argument("--skip-tests", action="store_true", help="skip pytest")
@@ -237,7 +244,7 @@ def run_release_checks(
 
 
 def default_runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, capture_output=True, check=False)
+    return subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True, check=False)
 
 
 def summarize_results(results: list[ReleaseCheckResult]) -> dict[str, Any]:
@@ -253,7 +260,9 @@ def summarize_results(results: list[ReleaseCheckResult]) -> dict[str, Any]:
     }
 
 
-def tail(text: str, max_chars: int = 4000) -> str:
+def tail(text: str | None, max_chars: int = 4000) -> str:
+    if text is None:
+        return ""
     if len(text) <= max_chars:
         return text
     return text[-max_chars:]
