@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Windows Python 3.12
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Compile scripts
+        run: >
+          python -m py_compile
+          scripts\build_artifact_manifest.py
+          scripts\validate_project_evidence.py
+          scripts\validate_documentation.py
+          scripts\validate_release.py
+          scripts\generate_report_assets.py
+          scripts\generate_statistical_report.py
+          scripts\summarize_failure_analysis.py
+          scripts\summarize_windows_games.py
+          scripts\validate_claims.py
+          scripts\evaluate_ensemble.py
+          scripts\hard_loss_refine.py
+          scripts\windows_minesweeper_agent.py
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Validate documentation
+        run: python scripts\validate_documentation.py --expected-tests 147

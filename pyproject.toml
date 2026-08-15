@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "minesweeper-rl"
 version = "0.1.0"
-description = "Hybrid logic + reinforcement learning agent for expert Minesweeper."
+description = "Reinforcement learning agent for expert Minesweeper with solver-guided training and Windows automation."
 requires-python = ">=3.12"
 dependencies = [
     "numpy",
@@ -15,7 +15,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "matplotlib"]
+dev = [
+    "pytest",
+    "matplotlib",
+    "pillow",
+    "mss",
+    "pywin32; platform_system == 'Windows'",
+]
 
 [project.scripts]
 minesweeper-rl = "minesweeper_rl.cli:main"

@@ -153,6 +153,9 @@ BASE_DEFAULTS: dict[str, Any] = {
     "solver_exact_limit": None,
     "solver_batch_size": 1,
     "quick_number_read": False,
+    "center_first_open": True,
+    "risk_head_weight": 0.0,
+    "ensemble_checkpoints": [],
 }
 
 COMMAND_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -2724,8 +2727,57 @@ def pop_legal_pending_open(
     return None
 
 
-def load_configured_trainer(args: argparse.Namespace) -> Any:
-    trainer = load_checkpoint(args.checkpoint, device=args.device)
+class DesktopPolicyEnsemble:
+    def __init__(self, trainers: list[Any], checkpoints: list[Path]) -> None:
+        if not trainers:
+            raise ValueError("at least one trainer is required")
+        self.trainers = trainers
+        self.checkpoints = checkpoints
+        self.config = trainers[0].config
+        self.model = trainers[0].model
+
+    def _decision_action_mask(self, action_mask: np.ndarray) -> np.ndarray:
+        return self.trainers[0]._decision_action_mask(action_mask)
+
+    def _select_action(
+        self,
+        board: np.ndarray,
+        global_features: np.ndarray,
+        action_mask: np.ndarray,
+        game: Any,
+        deterministic: bool,
+        mode: str,
+        risk_weight: float,
+    ) -> int:
+        if not deterministic or mode == "hybrid" or risk_weight != 0.0:
+            return self.trainers[0]._select_action(
+                board=board,
+                global_features=global_features,
+                action_mask=action_mask,
+                game=game,
+                deterministic=deterministic,
+                mode=mode,
+                risk_weight=risk_weight,
+            )
+
+        boards = np.stack([board])
+        global_features_batch = np.stack([global_features])
+        action_masks = np.stack([action_mask])
+        combined = None
+        for trainer in self.trainers:
+            scores = trainer._predict_policy_scores_batch(
+                boards=boards,
+                global_features_batch=global_features_batch,
+                action_masks=action_masks,
+                use_flip_ensemble=bool(trainer.config.inference_augment_flips),
+            )
+            combined = scores if combined is None else combined + scores
+        assert combined is not None
+        combined = combined / float(len(self.trainers))
+        return int(combined.argmax(dim=1).item())
+
+
+def configure_desktop_trainer(trainer: Any, args: argparse.Namespace) -> Any:
     trainer.config.rows = ROWS
     trainer.config.cols = COLS
     trainer.config.mines = MINES
@@ -2734,8 +2786,30 @@ def load_configured_trainer(args: argparse.Namespace) -> Any:
     trainer.config.decision_actions = decision_actions_for_flag_mode(args.flag_mode)
     trainer.config.inference_augment_flips = args.inference_flips
     trainer.config.inference_ensemble = args.inference_ensemble
+    trainer.config.risk_head_weight = float(getattr(args, "risk_head_weight", 0.0))
     trainer.model.eval()
     return trainer
+
+
+def load_configured_trainer(args: argparse.Namespace) -> Any:
+    checkpoints = [Path(args.checkpoint), *[Path(path) for path in getattr(args, "ensemble_checkpoints", [])]]
+    trainers = [
+        configure_desktop_trainer(load_checkpoint(checkpoint, device=args.device), args)
+        for checkpoint in checkpoints
+    ]
+    if len(trainers) == 1:
+        return trainers[0]
+    return DesktopPolicyEnsemble(trainers=trainers, checkpoints=checkpoints)
+
+
+def ensemble_checkpoints_from_args(args: argparse.Namespace) -> list[str]:
+    return [str(path) for path in getattr(args, "ensemble_checkpoints", [])]
+
+
+def choose_initial_open_action(board: Any, center_first_open: bool) -> Action | None:
+    if center_first_open and int(board.revealed.sum()) == 0:
+        return Action(ActionType.OPEN, ROWS // 2, COLS // 2)
+    return None
 
 
 def live_timing_settings(args: argparse.Namespace) -> dict[str, Any]:
@@ -3032,39 +3106,44 @@ def play_game(
                 action = None
 
             if action is None:
-                encoded_board, global_features, action_mask = encode_state(board)
-                action_mask = trainer._decision_action_mask(action_mask)
-                action_mask = apply_confirmed_open_action_mask(
-                    action_mask,
-                    open_forbidden_cells=forbidden_open_cells,
-                    confirmed_open_cells=confirmed_open_cells,
-                )
-                if basic_filter != "none" or audit_basic_enabled:
-                    basic_snapshot = basic_inference(board)
-                if basic_filter != "none":
-                    basic_safety_record = apply_basic_safety_filter(board, action_mask, basic_filter, snapshot=basic_snapshot)
-                if solver is not None and solver_filter != "none":
-                    selection_safety_record = apply_solver_safety_filter(solver, board, action_mask, solver_filter)
-                if not action_mask.any():
-                    if int(board.revealed.sum()) == 0:
-                        action = Action(ActionType.OPEN, ROWS // 2, COLS // 2)
-                        action_index = action_to_index(action, ROWS, COLS)
-                    else:
-                        break
+                initial_action = choose_initial_open_action(board, bool(getattr(args, "center_first_open", True)))
+                if initial_action is not None:
+                    action = initial_action
+                    action_index = action_to_index(action, ROWS, COLS)
                 else:
-                    action_index = trainer._select_action(
-                        board=encoded_board,
-                        global_features=global_features,
-                        action_mask=action_mask,
-                        game=board,
-                        deterministic=True,
-                        mode="rl",
-                        risk_weight=0.0,
+                    encoded_board, global_features, action_mask = encode_state(board)
+                    action_mask = trainer._decision_action_mask(action_mask)
+                    action_mask = apply_confirmed_open_action_mask(
+                        action_mask,
+                        open_forbidden_cells=forbidden_open_cells,
+                        confirmed_open_cells=confirmed_open_cells,
                     )
-                    action = decode_action_index(action_index, ROWS, COLS)
-                    if action.kind != ActionType.OPEN and not use_memory_flags:
-                        action = Action(ActionType.OPEN, action.row, action.col)
-                        action_index = action_to_index(action, ROWS, COLS)
+                    if basic_filter != "none" or audit_basic_enabled:
+                        basic_snapshot = basic_inference(board)
+                    if basic_filter != "none":
+                        basic_safety_record = apply_basic_safety_filter(board, action_mask, basic_filter, snapshot=basic_snapshot)
+                    if solver is not None and solver_filter != "none":
+                        selection_safety_record = apply_solver_safety_filter(solver, board, action_mask, solver_filter)
+                    if not action_mask.any():
+                        if int(board.revealed.sum()) == 0:
+                            action = Action(ActionType.OPEN, ROWS // 2, COLS // 2)
+                            action_index = action_to_index(action, ROWS, COLS)
+                        else:
+                            break
+                    else:
+                        action_index = trainer._select_action(
+                            board=encoded_board,
+                            global_features=global_features,
+                            action_mask=action_mask,
+                            game=board,
+                            deterministic=True,
+                            mode="rl",
+                            risk_weight=0.0,
+                        )
+                        action = decode_action_index(action_index, ROWS, COLS)
+                        if action.kind != ActionType.OPEN and not use_memory_flags:
+                            action = Action(ActionType.OPEN, action.row, action.col)
+                            action_index = action_to_index(action, ROWS, COLS)
 
         selection_elapsed = time.perf_counter() - selection_started_at
         before_signature = board_signature(board)
@@ -3473,6 +3552,8 @@ def play_game(
         "version": 1,
         "source": "windows_minesweeper",
         "checkpoint": str(args.checkpoint),
+        "ensemble_checkpoints": ensemble_checkpoints_from_args(args),
+        "center_first_open": bool(getattr(args, "center_first_open", True)),
         "game_index": game_index,
         "click_method": args.click_method,
         "resolved_click_method": desktop.effective_click_method(),
@@ -5102,6 +5183,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
         "speed_profile": getattr(args, "speed_profile", "safe"),
         "model_flip_ensemble": args.inference_flips,
         "model_ensemble_method": args.inference_ensemble,
+        "model_risk_head_weight": float(getattr(args, "risk_head_weight", 0.0)),
+        "ensemble_checkpoints": ensemble_checkpoints_from_args(args),
+        "center_first_open": bool(getattr(args, "center_first_open", True)),
         "target_win_rate": float(args.target_win_rate),
         "target_avg_seconds": float(args.target_avg_seconds),
         "target_passed": target_passed,
@@ -5273,6 +5357,9 @@ def streak_manifest(
         "speed_profile": getattr(args, "speed_profile", "safe"),
         "model_flip_ensemble": args.inference_flips,
         "model_ensemble_method": args.inference_ensemble,
+        "model_risk_head_weight": float(getattr(args, "risk_head_weight", 0.0)),
+        "ensemble_checkpoints": ensemble_checkpoints_from_args(args),
+        "center_first_open": bool(getattr(args, "center_first_open", True)),
         "resolved_click_method": resolved_click_method or args.click_method,
         "solver_audit_enabled": bool(getattr(args, "audit_solver", False)),
         "basic_safety_filter": getattr(args, "basic_safety_filter", "none"),
@@ -5325,6 +5412,14 @@ def main() -> None:
     parser.add_argument("--speed-profile", choices=["safe", "fast", "turbo", "custom"], default=argparse.SUPPRESS)
     parser.add_argument("--inference-flips", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--inference-ensemble", choices=["logits", "probs"], default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ensemble-checkpoint",
+        dest="ensemble_checkpoints",
+        action="append",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="add another RL checkpoint and average policy scores at inference time",
+    )
     parser.add_argument("--max-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--action-delay", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--capture-delay", type=float, default=argparse.SUPPRESS)
@@ -5358,6 +5453,26 @@ def main() -> None:
         action="store_true",
         default=argparse.SUPPRESS,
         help="after an open, read only the target cell when it becomes a nonzero number",
+    )
+    parser.add_argument(
+        "--center-first-open",
+        dest="center_first_open",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="force the first click to the board center, matching the RL training environment",
+    )
+    parser.add_argument(
+        "--model-first-open",
+        dest="center_first_open",
+        action="store_false",
+        default=argparse.SUPPRESS,
+        help="let the model choose the first click on a fully hidden board",
+    )
+    parser.add_argument(
+        "--risk-head-weight",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="bias open and flag choices using the model's risk head",
     )
     parser.add_argument("--audit-solver", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--audit-basic", action="store_true", default=argparse.SUPPRESS)

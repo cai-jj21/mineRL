@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+import torch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,149 @@ def test_default_desktop_decision_path_keeps_basic_filter_off() -> None:
     assert windows_agent.BASE_DEFAULTS["solver_safety_filter"] == "none"
     assert not windows_agent.BASE_DEFAULTS["audit_solver"]
     assert not windows_agent.BASE_DEFAULTS["audit_basic"]
+    assert windows_agent.BASE_DEFAULTS["center_first_open"] is True
+    assert windows_agent.BASE_DEFAULTS["risk_head_weight"] == 0.0
+
+
+def test_load_configured_trainer_applies_risk_head_weight(monkeypatch) -> None:
+    captured = {}
+
+    class FakeModel:
+        def eval(self):
+            captured["model_eval"] = True
+
+    fake_trainer = SimpleNamespace(
+        config=SimpleNamespace(),
+        model=FakeModel(),
+    )
+
+    def fake_load_checkpoint(checkpoint, device):
+        captured["checkpoint"] = checkpoint
+        captured["device"] = device
+        return fake_trainer
+
+    monkeypatch.setattr(windows_agent, "load_checkpoint", fake_load_checkpoint)
+    args = Namespace(
+        checkpoint=Path("artifacts/full_rlmix_20.pt"),
+        device="cuda",
+        max_steps=600,
+        flag_mode="memory",
+        inference_flips=True,
+        inference_ensemble="probs",
+        risk_head_weight=0.35,
+    )
+
+    trainer = windows_agent.load_configured_trainer(args)
+
+    assert trainer is fake_trainer
+    assert captured["checkpoint"] == Path("artifacts/full_rlmix_20.pt")
+    assert captured["device"] == "cuda"
+    assert captured["model_eval"] is True
+    assert trainer.config.rows == windows_agent.ROWS
+    assert trainer.config.cols == windows_agent.COLS
+    assert trainer.config.mines == windows_agent.MINES
+    assert trainer.config.safe_radius == 1
+    assert trainer.config.max_steps == 600
+    assert trainer.config.decision_actions == "full"
+    assert trainer.config.inference_augment_flips is True
+    assert trainer.config.inference_ensemble == "probs"
+    assert trainer.config.risk_head_weight == 0.35
+
+
+def test_load_configured_trainer_builds_checkpoint_ensemble(monkeypatch) -> None:
+    loaded: list[Path] = []
+
+    class FakeModel:
+        def eval(self):
+            pass
+
+    def fake_load_checkpoint(checkpoint, device):
+        loaded.append(Path(checkpoint))
+        return SimpleNamespace(config=SimpleNamespace(), model=FakeModel())
+
+    monkeypatch.setattr(windows_agent, "load_checkpoint", fake_load_checkpoint)
+    args = Namespace(
+        checkpoint=Path("artifacts/full_rlmix_20.pt"),
+        ensemble_checkpoints=[Path("artifacts/full_rlmix_20_refine.pt")],
+        device="cuda",
+        max_steps=600,
+        flag_mode="memory",
+        inference_flips=True,
+        inference_ensemble="probs",
+        risk_head_weight=0.0,
+    )
+
+    trainer = windows_agent.load_configured_trainer(args)
+
+    assert isinstance(trainer, windows_agent.DesktopPolicyEnsemble)
+    assert loaded == [
+        Path("artifacts/full_rlmix_20.pt"),
+        Path("artifacts/full_rlmix_20_refine.pt"),
+    ]
+    assert len(trainer.trainers) == 2
+    assert trainer.checkpoints == loaded
+
+
+def test_desktop_policy_ensemble_averages_scores() -> None:
+    first_action = windows_agent.Action(windows_agent.ActionType.OPEN, 0, 0)
+    second_action = windows_agent.Action(windows_agent.ActionType.OPEN, 0, 1)
+    first_index = windows_agent.action_to_index(first_action, windows_agent.ROWS, windows_agent.COLS)
+    second_index = windows_agent.action_to_index(second_action, windows_agent.ROWS, windows_agent.COLS)
+
+    class FakeTrainer:
+        def __init__(self, first_score: float, second_score: float) -> None:
+            self.config = SimpleNamespace(inference_augment_flips=False)
+            self.model = SimpleNamespace()
+            self.first_score = first_score
+            self.second_score = second_score
+
+        def _decision_action_mask(self, action_mask):
+            return action_mask
+
+        def _select_action(self, **kwargs):
+            return first_index
+
+        def _predict_policy_scores_batch(self, **kwargs):
+            scores = torch.full((1, 4 * windows_agent.ROWS * windows_agent.COLS), -1e9)
+            scores[0, first_index] = self.first_score
+            scores[0, second_index] = self.second_score
+            return scores
+
+    ensemble = windows_agent.DesktopPolicyEnsemble(
+        trainers=[
+            FakeTrainer(first_score=4.0, second_score=1.0),
+            FakeTrainer(first_score=0.0, second_score=8.0),
+        ],
+        checkpoints=[Path("a.pt"), Path("b.pt")],
+    )
+    action_mask = np.zeros((4, windows_agent.ROWS, windows_agent.COLS), dtype=bool)
+    action_mask[windows_agent.action_channel(windows_agent.ActionType.OPEN), 0, 0] = True
+    action_mask[windows_agent.action_channel(windows_agent.ActionType.OPEN), 0, 1] = True
+
+    selected = ensemble._select_action(
+        board=np.zeros((1, windows_agent.ROWS, windows_agent.COLS), dtype=np.float32),
+        global_features=np.zeros((1,), dtype=np.float32),
+        action_mask=action_mask,
+        game=SimpleNamespace(),
+        deterministic=True,
+        mode="rl",
+        risk_weight=0.0,
+    )
+
+    assert selected == second_index
+
+
+def test_choose_initial_open_action_uses_center_only_on_empty_board() -> None:
+    empty_board = SimpleNamespace(revealed=np.zeros((windows_agent.ROWS, windows_agent.COLS), dtype=bool))
+    non_empty_board = SimpleNamespace(revealed=np.pad(np.array([[True]], dtype=bool), ((0, windows_agent.ROWS - 1), (0, windows_agent.COLS - 1))))
+
+    action = windows_agent.choose_initial_open_action(empty_board, center_first_open=True)
+    assert action is not None
+    assert action.kind == windows_agent.ActionType.OPEN
+    assert (action.row, action.col) == (windows_agent.ROWS // 2, windows_agent.COLS // 2)
+
+    assert windows_agent.choose_initial_open_action(empty_board, center_first_open=False) is None
+    assert windows_agent.choose_initial_open_action(non_empty_board, center_first_open=True) is None
 
 
 def test_solver_assist_prefers_forced_safe_open_and_keeps_mines_virtual() -> None:
@@ -2199,6 +2343,7 @@ def test_play_game_default_path_does_not_apply_safety_filters(monkeypatch, tmp_p
         solver_safety_filter="none",
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=1,
         record_frames="none",
         no_final_images=True,
@@ -2314,6 +2459,7 @@ def test_play_game_quick_number_read_skips_full_readback(monkeypatch, tmp_path: 
         solver_batch_size=1,
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=1,
         record_frames="none",
         no_final_images=True,
@@ -2420,6 +2566,7 @@ def test_play_game_blocks_unconfirmed_open_in_simulated_desktop(monkeypatch, tmp
         solver_exact_limit=None,
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=2,
         record_frames="none",
         no_final_images=True,
@@ -2542,6 +2689,7 @@ def test_play_game_retries_open_until_readback_confirms(monkeypatch, tmp_path: P
         solver_exact_limit=None,
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=1,
         record_frames="none",
         no_final_images=True,
@@ -2680,6 +2828,7 @@ def test_play_game_defers_reads_inside_solver_safe_batch(monkeypatch, tmp_path: 
         solver_batch_size=3,
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=3,
         record_frames="none",
         no_final_images=True,
@@ -2804,6 +2953,7 @@ def test_play_game_attributes_before_click_dialog_to_previous_action(monkeypatch
         solver_safety_filter="none",
         clear_stop_on_start=False,
         start_mode="current",
+        center_first_open=False,
         max_steps=2,
         record_frames="none",
         no_final_images=True,
