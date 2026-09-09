@@ -19,3 +19,23 @@ def test_model_forward_shapes() -> None:
     assert logits.shape == (2, ACTION_CHANNELS, 16, 30)
     assert values.shape == (2,)
     assert risk_logits.shape == (2, 1, 16, 30)
+
+    logits, values, risk_logits, counterfactual = model.forward_with_aux(board, global_features)
+    assert logits.shape == (2, ACTION_CHANNELS, 16, 30)
+    assert values.shape == (2,)
+    assert risk_logits.shape == (2, 1, 16, 30)
+    assert counterfactual.shape == (2, 16, 30)
+
+
+def test_risk_head_uses_global_context() -> None:
+    model = MinesweeperNet()
+    board = torch.zeros(1, BOARD_CHANNELS, 16, 30)
+    low_remaining = torch.zeros(1, GLOBAL_FEATURES)
+    high_remaining = low_remaining.clone()
+    high_remaining[:, 4] = 1.0
+
+    with torch.no_grad():
+        low_risk = model.forward_with_risk(board, low_remaining)[2]
+        high_risk = model.forward_with_risk(board, high_remaining)[2]
+
+    assert not torch.equal(low_risk, high_risk)

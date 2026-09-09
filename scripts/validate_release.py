@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -17,6 +17,10 @@ COMPILE_TARGETS = [
     Path("scripts/validate_release.py"),
     Path("scripts/generate_report_assets.py"),
     Path("scripts/generate_statistical_report.py"),
+    Path("scripts/build_experiment_database.py"),
+    Path("scripts/analyze_experiment_database.py"),
+    Path("scripts/generate_training_feedback_plan.py"),
+    Path("scripts/export_training_feedback_dataset.py"),
     Path("scripts/summarize_failure_analysis.py"),
     Path("scripts/summarize_windows_games.py"),
     Path("scripts/validate_claims.py"),
@@ -58,7 +62,7 @@ def configure_utf8_stdout() -> None:
 def main() -> None:
     configure_utf8_stdout()
     parser = argparse.ArgumentParser(description="Run the release-level validation gate for the Minesweeper RL project.")
-    parser.add_argument("--expected-tests", type=int, default=147)
+    parser.add_argument("--expected-tests", type=int, default=160)
     parser.add_argument("--skip-tests", action="store_true", help="skip pytest")
     parser.add_argument("--skip-evidence", action="store_true", help="skip local experiment evidence validation")
     parser.add_argument("--skip-claims", action="store_true", help="skip report claim audit")
@@ -195,6 +199,31 @@ def build_release_checks(
                 command=[sys.executable, "scripts/build_artifact_manifest.py"],
                 detail="rebuild artifact checksum manifest",
             )
+        )
+    if not skip_evidence and not skip_claims and not skip_manifest:
+        checks.extend(
+            [
+                ReleaseCheckSpec(
+                    id="experiment_database",
+                    command=[sys.executable, "scripts/build_experiment_database.py", "--include-actions", "streak"],
+                    detail="build the SQLite experiment database for analysis",
+                ),
+                ReleaseCheckSpec(
+                    id="database_analysis",
+                    command=[sys.executable, "scripts/analyze_experiment_database.py"],
+                    detail="export analysis from the SQLite experiment database",
+                ),
+                ReleaseCheckSpec(
+                    id="training_feedback_plan",
+                    command=[sys.executable, "scripts/generate_training_feedback_plan.py"],
+                    detail="generate model-training feedback from the experiment warehouse",
+                ),
+                ReleaseCheckSpec(
+                    id="training_feedback_dataset",
+                    command=[sys.executable, "scripts/export_training_feedback_dataset.py"],
+                    detail="export curated training samples from the experiment warehouse",
+                ),
+            ]
         )
     return checks
 

@@ -73,6 +73,18 @@ class MinesweeperNet(nn.Module):
             nn.SiLU(),
             nn.Conv2d(hidden_channels // 2, 1, kernel_size=1),
         )
+        # The risk estimate needs board-wide state such as remaining mines and
+        # covered-cell ratio, especially when no forced-safe move exists.
+        self.risk_global = nn.Sequential(
+            nn.Linear(global_features, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
+        )
+        self.counterfactual_head = nn.Sequential(
+            nn.Conv2d(hidden_channels, hidden_channels // 2, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(hidden_channels // 2, 1, kernel_size=1),
+        )
         self.value_head = nn.Sequential(
             nn.Linear(hidden_channels + global_features, hidden_channels),
             nn.SiLU(),
@@ -80,12 +92,10 @@ class MinesweeperNet(nn.Module):
         )
 
     def forward(self, board: torch.Tensor, global_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self._policy_features(board)
-        policy_context = self.policy_global(global_features).view(global_features.shape[0], -1, 1, 1)
-        policy_logits = self.policy_head(features + policy_context)
-        pooled = features.mean(dim=(2, 3))
-        value_input = torch.cat([pooled, global_features], dim=1)
-        value = self.value_head(value_input).squeeze(-1)
+        policy_logits, value, _risk_logits, _counterfactual_values = self.forward_with_aux(
+            board,
+            global_features,
+        )
         return policy_logits, value
 
     def forward_with_risk(
@@ -93,14 +103,28 @@ class MinesweeperNet(nn.Module):
         board: torch.Tensor,
         global_features: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        policy_logits, value, risk_logits, _counterfactual_values = self.forward_with_aux(
+            board,
+            global_features,
+        )
+        return policy_logits, value, risk_logits
+
+    def forward_with_aux(
+        self,
+        board: torch.Tensor,
+        global_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         features = self._policy_features(board)
         policy_context = self.policy_global(global_features).view(global_features.shape[0], -1, 1, 1)
-        policy_logits = self.policy_head(features + policy_context)
-        risk_logits = self.risk_head(features)
+        policy_features = features + policy_context
+        policy_logits = self.policy_head(policy_features)
+        risk_context = self.risk_global(global_features).view(global_features.shape[0], -1, 1, 1)
+        risk_logits = self.risk_head(features + risk_context)
+        counterfactual_values = self.counterfactual_head(policy_features).squeeze(1)
         pooled = features.mean(dim=(2, 3))
         value_input = torch.cat([pooled, global_features], dim=1)
         value = self.value_head(value_input).squeeze(-1)
-        return policy_logits, value, risk_logits
+        return policy_logits, value, risk_logits, counterfactual_values
 
     def _policy_features(self, board: torch.Tensor) -> torch.Tensor:
         features = self.backbone(board)

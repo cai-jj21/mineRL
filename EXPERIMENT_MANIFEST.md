@@ -30,9 +30,10 @@
 | `artifacts/report_assets/ten_streak_review.md` | 2086 | `29f9bc01c12d5dc0146c9d51ec01a976cfb8bf8b525fd319d945f9fc654d25a2` |
 | `artifacts/report_assets/statistical_summary.json` | 2313 | `6467a10b1271ba1d3001d6b3d4ded908b4ebfaa14ca2801c3d3aba1a8a8d0284` |
 | `artifacts/report_assets/statistical_summary.md` | 1213 | `8ce68c21b23957e2fb594fdf854106e2a7ac2eb6a35fc22142cffe9f7e0d634c` |
-| `artifacts/report_assets/claim_audit.json` | 31038 | `ce359613ca7de70a45183cae32813d575b9b7cf22fd036bce3f095bab46eb571` |
+| `artifacts/report_assets/claim_audit.json` | 34202 | `29cba06e069047f7643e6dfc55e6a9700f65d093c5dd49bdfe44cf7479e0b955` |
 | `artifacts/report_assets/failure_analysis_summary.json` | 7603 | `9ad7adc44114117e495bf68e10b6122675d15ef021ed378a4f867c81934929ab` |
 | `FAILURE_ANALYSIS.md` | 3446 | `6ee06eee323829d0bd602b11d79de8ba0c292445635d738fcba7ad4d5d5544a4` |
+| `sql/warehouse_analysis.sql` | 5820 | `4f9cc34a513c704d6e2860a214824ff9cda94642fdd630af68a323a01f916349` |
 | `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/game_747.json` | 775234 | `81cd79343bd69ef93b7d98aaa8db2dc02fe03895595e1caeaac233d5700ef415` |
 | `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/game_748.json` | 706223 | `2621796252967b91de9eae29ff75ebdb6bd7b1d64832185ca411402be31aab37` |
 | `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/game_749.json` | 675891 | `16daa85824304ffef926a4cf56b7eedc6110649dc21b1036300649d367c007be` |

@@ -31,6 +31,12 @@ artifacts/report_assets/statistical_summary.md
 artifacts/report_assets/claim_audit.json
 artifacts/report_assets/evidence_validation.json
 artifacts/report_assets/failure_analysis_summary.json
+artifacts/report_assets/minesweeper_experiments.sqlite
+artifacts/report_assets/database_analysis.md
+artifacts/report_assets/database_analysis.json
+artifacts/report_assets/training_feedback_plan.md
+artifacts/report_assets/training_feedback_plan.json
+sql/warehouse_analysis.sql
 artifacts/report_assets/ten_streak_review.md
 artifacts/report_assets/artifact_manifest.json
 ```
@@ -58,6 +64,12 @@ python scripts/summarize_failure_analysis.py
 python scripts/validate_project_evidence.py `
   --output artifacts/report_assets/evidence_validation.json
 
+python scripts/build_experiment_database.py --include-actions all
+
+python scripts/analyze_experiment_database.py
+
+python scripts/generate_training_feedback_plan.py
+
 python scripts/build_artifact_manifest.py
 ```
 
@@ -65,7 +77,7 @@ python scripts/build_artifact_manifest.py
 
 ```text
 validate_project_evidence: 25 / 25 passed
-build_artifact_manifest: 26 artifacts, missing []
+build_artifact_manifest: 27 artifacts, missing []
 ```
 
 ## 归档建议
@@ -75,6 +87,10 @@ build_artifact_manifest: 26 artifacts, missing []
 - `artifacts/full_rlmix_20.pt`
 - `artifacts/full_rlmix_100_best.pt`
 - `artifacts/report_assets/`
+- `artifacts/report_assets/minesweeper_experiments.sqlite`
+- `artifacts/report_assets/database_analysis.md`
+- `artifacts/report_assets/database_analysis.json`
+- `sql/warehouse_analysis.sql`
 - `artifacts/windows_agent/pure_rl_fast2_500/per_game_summary.json`
 - `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/per_game_summary.json`
 - `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/game_747.json` 到 `game_756.json`

@@ -14,6 +14,7 @@
 | 真实桌面执行证据 | 已满足 | `WINDOWS_AGENT_RESULTS.md`、`artifacts/windows_agent/*/per_game_summary.json` | 记录 Windows 完成局、点击/读盘异常、速度和十连胜区间 |
 | 核心实验结果可查 | 已满足 | `artifacts/report_assets/experiment_summary.md`、`statistical_summary.md` | 内部仿真、Windows 单模型、Windows 集成结果均有样本量和来源 |
 | 消融与失败分析 | 已满足 | `ABLATION_STUDY.md`、`FAILURE_ANALYSIS.md` | 区分严格评估、弱对照和诊断证据；解释错旗、残局 forced move 和风险 gap |
+| 数据开发案例 | 已满足 | `DATA_DEVELOPMENT_CASE.md`、`scripts/build_experiment_database.py`、`scripts/analyze_experiment_database.py`、`scripts/generate_training_feedback_plan.py`、`sql/warehouse_analysis.sql` | 说明数据采集、ETL 批次、源文件血缘、SQLite 实验数仓、ODS/DWD/DWS/ADS 视图、SQL 分析、训练策略反哺、质量校验、指标汇总、可复现报告和 artifact manifest 链路 |
 | 简历表达材料 | 已满足 | `PROJECT_ONE_PAGER.md`、`RESUME_PROJECT_CARD.md`、`DEMO_GUIDE.md`、`INTERVIEW_QA.md` | 提供一页总览、简历 bullet、30 秒开场、5 分钟演示、答辩问答和常见追问回答 |
 | 可复现流程 | 已满足 | `REPRODUCIBILITY.md`、`ARTIFACTS.md`、`EXPERIMENT_MANIFEST.md` | 给出评估、报告资产、失败分析、证据校验和 artifact 哈希清单 |
 | 自动化质量门禁 | 已满足 | `tests/`、`.github/workflows/ci.yml`、`scripts/validate_release.py` | 本地 release gate 串联编译、测试、文档、证据、统计、声明和 artifact manifest |
@@ -35,9 +36,10 @@
 1. 先用 `PROJECT_ONE_PAGER.md` 讲项目目标、核心结果和证据入口。
 2. 用 `ARCHITECTURE.md` 解释环境、状态编码、模型、solver 训练信号和 Windows 执行层。
 3. 用 `EVALUATION_PROTOCOL.md` 和 `statistical_summary.md` 说明胜率口径和 Wilson 区间，避免只报点估计。
-4. 用 `ABLATION_STUDY.md` 回答“为什么集成、为什么还输、下一步怎么做”。
-5. 用 `INTERVIEW_QA.md` 防守 solver 边界、统计口径、十连胜证据和失败归因。
-6. 用 `RESUME_PROJECT_CARD.md` 收束到简历 bullet 和常见追问。
+4. 用 `DATA_DEVELOPMENT_CASE.md` 展示数据采集、ETL、质量校验、指标汇总和可复现报告能力。
+5. 用 `ABLATION_STUDY.md` 回答“为什么集成、为什么还输、下一步怎么做”。
+6. 用 `INTERVIEW_QA.md` 防守 solver 边界、统计口径、十连胜证据和失败归因。
+7. 用 `RESUME_PROJECT_CARD.md` 收束到简历 bullet 和常见追问。
 
 ## 仍需如实说明的边界
 
@@ -50,7 +52,7 @@
 ## 发布前最终命令
 
 ```powershell
-python scripts/validate_release.py --expected-tests 147
+python scripts/validate_release.py --expected-tests 150
 git status -sb
 git push origin master
 ```

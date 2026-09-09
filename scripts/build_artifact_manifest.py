@@ -17,6 +17,7 @@ DEFAULT_STREAK_DIR = Path("artifacts/windows_agent/pure_rl_ensemble_20_100best_1
 DEFAULT_OUTPUT_JSON = DEFAULT_REPORT_DIR / "artifact_manifest.json"
 DEFAULT_OUTPUT_MD = Path("EXPERIMENT_MANIFEST.md")
 DEFAULT_FAILURE_ANALYSIS_MD = Path("FAILURE_ANALYSIS.md")
+DEFAULT_WAREHOUSE_SQL = Path("sql/warehouse_analysis.sql")
 
 
 def configure_utf8_stdout() -> None:
@@ -34,6 +35,7 @@ def main() -> None:
     parser.add_argument("--desktop-summary", type=Path, default=DEFAULT_DESKTOP_SUMMARY)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
     parser.add_argument("--failure-analysis-md", type=Path, default=DEFAULT_FAILURE_ANALYSIS_MD)
+    parser.add_argument("--warehouse-sql", type=Path, default=DEFAULT_WAREHOUSE_SQL)
     parser.add_argument("--streak-dir", type=Path, default=DEFAULT_STREAK_DIR)
     parser.add_argument("--streak-start", type=int, default=747)
     parser.add_argument("--streak-end", type=int, default=756)
@@ -48,6 +50,7 @@ def main() -> None:
         desktop_summary=args.desktop_summary,
         report_dir=args.report_dir,
         failure_analysis_md=args.failure_analysis_md,
+        warehouse_sql=args.warehouse_sql,
         streak_dir=args.streak_dir,
         streak_start=args.streak_start,
         streak_end=args.streak_end,
@@ -90,6 +93,7 @@ def default_artifact_paths(
     streak_dir: Path,
     streak_start: int,
     streak_end: int,
+    warehouse_sql: Path = DEFAULT_WAREHOUSE_SQL,
 ) -> list[Path]:
     report_files = [
         report_dir / "experiment_summary.md",
@@ -104,6 +108,7 @@ def default_artifact_paths(
         report_dir / "claim_audit.json",
         report_dir / "failure_analysis_summary.json",
         failure_analysis_md,
+        warehouse_sql,
     ]
     streak_files = [streak_dir / f"game_{index:03d}.json" for index in range(streak_start, streak_end + 1)]
     return [candidate_eval, ensemble_eval, desktop_single_summary, desktop_summary, *report_files, *streak_files]

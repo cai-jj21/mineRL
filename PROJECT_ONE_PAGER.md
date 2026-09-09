@@ -2,7 +2,7 @@
 
 ## 一句话
 
-这是一个面向经典高级扫雷 `16 x 30 / 99` 的强化学习项目：从仿真环境、Actor-Critic 策略网络、solver-guided 训练信号，到真实 Windows 扫雷执行层和可审计实验报告，形成了一套可以放进简历和 GitHub 展示的研究闭环。
+这是一个面向经典高级扫雷 `16 x 30 / 99` 的强化学习项目：从仿真环境、Actor-Critic 策略网络、solver-guided 训练信号，到真实 Windows 扫雷执行层、实验数据链路和可审计报告，形成了一套可以放进简历和 GitHub 展示的研究闭环。
 
 ## 当前结果
 
@@ -28,8 +28,9 @@
 
 - **研究侧**：把扫雷中的局部逻辑、全局剩余雷数约束和高风险稀疏奖励问题放进 RL 框架中，比较纯 RL、solver baseline、checkpoint ensemble 和 hard-loss refine。
 - **工程侧**：实现真实 Windows 扫雷执行层，并用 action-level 日志证明点击、读盘和终局检测不是黑盒。
+- **数据侧**：将 `game_*.json`、`analysis.json` 和 `failure_analysis_summary.json` 原始日志汇总为逐局指标、SQLite 实验数仓、ODS/DWD/DWS/ADS 视图、SQL 分析模板、训练反馈计划、统计置信区间、失败复盘、声明审计和 artifact manifest。
 - **实验侧**：将内部仿真、真实桌面运行、十连胜复盘、失败分析和报告资产生成串成可复现闭环。
-- **交付侧**：提供 `PROJECT_REPORT.md`、`ABLATION_STUDY.md`、`PROJECT_COMPLETION_AUDIT.md`、`MODEL_CARD.md`、`EVALUATION_PROTOCOL.md`、`REPRODUCIBILITY.md`、`RESUME_PROJECT_CARD.md`、CI 和发布门禁。
+- **交付侧**：提供 `PROJECT_REPORT.md`、`DATA_DEVELOPMENT_CASE.md`、`ABLATION_STUDY.md`、`PROJECT_COMPLETION_AUDIT.md`、`MODEL_CARD.md`、`EVALUATION_PROTOCOL.md`、`REPRODUCIBILITY.md`、`RESUME_PROJECT_CARD.md`、CI 和发布门禁。
 
 ## 可信边界
 
@@ -46,6 +47,7 @@
 
 - 完整报告：`PROJECT_REPORT.md`
 - 架构总览：`ARCHITECTURE.md`
+- 数据开发案例：`DATA_DEVELOPMENT_CASE.md`
 - 演示路线：`DEMO_GUIDE.md`
 - 消融对照：`ABLATION_STUDY.md`
 - 完成度审计：`PROJECT_COMPLETION_AUDIT.md`
@@ -55,4 +57,8 @@
 - 简历卡：`RESUME_PROJECT_CARD.md`
 - Windows 结果：`WINDOWS_AGENT_RESULTS.md`
 - 产物哈希：`EXPERIMENT_MANIFEST.md`
-- 发布门禁：`python scripts/validate_release.py --expected-tests 147`
+- 实验数仓：`artifacts/report_assets/minesweeper_experiments.sqlite`
+- 数据库分析：`artifacts/report_assets/database_analysis.md`
+- 训练反馈计划：`artifacts/report_assets/training_feedback_plan.md`
+- SQL 模板：`sql/warehouse_analysis.sql`
+- 发布门禁：`python scripts/validate_release.py --expected-tests 160`

@@ -1,6 +1,6 @@
 # 项目演示指南
 
-本文档用于面试、答辩或 GitHub 项目展示时快速组织讲述路线。它不替代 `PROJECT_REPORT.md`，而是把报告、架构、评估协议、复现命令和证据文件串成一套可现场演示的流程。胜率、连胜和执行异常的统一口径见 `EVALUATION_PROTOCOL.md`。
+本文档用于面试、答辩或 GitHub 项目展示时快速组织讲述路线。它不替代 `PROJECT_REPORT.md`，而是把报告、架构、评估协议、数据开发案例、复现命令和证据文件串成一套可现场演示的流程。胜率、连胜和执行异常的统一口径见 `EVALUATION_PROTOCOL.md`，数据采集、ETL 和质量校验链路见 `DATA_DEVELOPMENT_CASE.md`。
 
 ## 30 秒开场
 
@@ -15,10 +15,11 @@
 1. 打开 `README.md`，先看目标、当前结果和十连胜路径。
 2. 打开 `ARCHITECTURE.md`，用架构图解释五层系统：环境、特征、模型、solver、Windows 执行与证据。
 3. 打开 `EVALUATION_PROTOCOL.md`，解释内部仿真、Windows 桌面和十连胜的评估口径。
-4. 打开 `MODEL_CARD.md`，说明最终策略输入输出、checkpoint、训练信号和限制。
-5. 打开 `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/per_game_summary.json`，展示 `longest_streak = 10`、区间 `747-756`、执行异常为 0。
-6. 运行证据校验命令，证明报告数字来自本地 JSON。
-7. 最后打开 `INTERVIEW_QA.md` 和 `RESUME_PROJECT_CARD.md`，展示常见追问的回答边界，以及可以放进简历的 bullet。
+4. 打开 `DATA_DEVELOPMENT_CASE.md`，说明逐局 JSON 如何进入 ETL、指标汇总、声明审计和 artifact manifest。
+5. 打开 `MODEL_CARD.md`，说明最终策略输入输出、checkpoint、训练信号和限制。
+6. 打开 `artifacts/windows_agent/pure_rl_ensemble_20_100best_1000/per_game_summary.json`，展示 `longest_streak = 10`、区间 `747-756`、执行异常为 0。
+7. 运行证据校验命令，证明报告数字来自本地 JSON。
+8. 最后打开 `INTERVIEW_QA.md` 和 `RESUME_PROJECT_CARD.md`，展示常见追问的回答边界，以及可以放进简历的 bullet。
 
 这条路线的好处是先给结果，再解释系统，再给证据，最后用 `INTERVIEW_QA.md` 防守追问，并回到简历表达。
 
@@ -58,7 +59,20 @@ python scripts/validate_project_evidence.py `
 - 内部集成、Windows 汇总、十连胜区间和报告资产一致。
 
 ```powershell
-python scripts/validate_documentation.py --expected-tests 147 --check-artifacts
+python scripts/build_experiment_database.py --include-actions streak
+python scripts/analyze_experiment_database.py
+python scripts/generate_training_feedback_plan.py
+```
+
+预期重点：
+
+- 生成 `artifacts/report_assets/minesweeper_experiments.sqlite`。
+- 生成 `artifacts/report_assets/database_analysis.md` 和 `database_analysis.json`。
+- 生成 `artifacts/report_assets/training_feedback_plan.md` 和 `training_feedback_plan.json`。
+- 可用 `sql/warehouse_analysis.sql` 查看 `v_ods_source_inventory`、`v_dws_run_kpi`、`v_ads_experiment_dashboard`、`v_execution_anomalies`、`v_ten_streak_games` 等视图。
+
+```powershell
+python scripts/validate_documentation.py --expected-tests 160 --check-artifacts
 ```
 
 预期重点：
@@ -71,7 +85,7 @@ python scripts/validate_documentation.py --expected-tests 147 --check-artifacts
 发布前也可以直接跑总校验：
 
 ```powershell
-python scripts/validate_release.py --expected-tests 147
+python scripts/validate_release.py --expected-tests 160
 ```
 
 ## 可选现场运行

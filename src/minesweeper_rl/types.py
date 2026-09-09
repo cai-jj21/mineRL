@@ -66,7 +66,13 @@ class EpisodeTransition:
     expert_action_mask: np.ndarray | None = None
     mine_mask: np.ndarray | None = None
     risk_map: np.ndarray | None = None
+    # Offline-only action quality for OPEN candidates. Values are finite only
+    # for labelled candidates; the hidden board is never exposed at inference.
+    counterfactual_open_values: np.ndarray | None = None
     expert_is_guess: bool = False
+    source_quality: float = 1.0
+    extreme_score: float = 0.0
+    extreme_family: str = ""
 
 
 @dataclass

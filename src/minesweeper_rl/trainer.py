@@ -46,9 +46,32 @@ class TrainingConfig:
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     solver_imitation_coef: float = 0.2
+    counterfactual_coef: float = 0.0
+    counterfactual_margin: float = 0.1
+    counterfactual_temperature: float = 0.08
+    counterfactual_policy_coef: float = 0.0
+    counterfactual_policy_temperature: float = 0.25
+    counterfactual_policy_topk: int = 16
+    counterfactual_policy_min_gap: float = 0.0
+    counterfactual_policy_full_action: bool = False
+    counterfactual_only_guess: bool = False
+    counterfactual_value_head_coef: float = 0.0
+    counterfactual_value_head_clip: float = 4.0
+    counterfactual_value_rank_coef: float = 0.0
+    counterfactual_value_target_mode: str = "raw"
     mine_aux_coef: float = 0.0
     risk_supervision_coef: float = 0.0
     risk_temperature: float = 0.08
+    counterfactual_risk_head_coef: float = 0.0
+    counterfactual_risk_temperature: float = 1.0
+    counterfactual_risk_loss_mode: str = "bce"
+    guess_survival_coef: float = 0.0
+    guess_survival_mine_weight: float = 4.0
+    guess_survival_topk: int = 32
+    guess_survival_margin: float = 0.05
+    behavior_mine_demotion_coef: float = 0.0
+    behavior_mine_demotion_topk: int = 4
+    behavior_mine_demotion_margin: float = 0.1
     grad_clip: float = 1.0
     hidden_channels: int = 64
     residual_blocks: int = 3
@@ -87,6 +110,41 @@ class TrainingConfig:
             raise ValueError("exploration_topk must be non-negative")
         if self.inference_ensemble not in INFERENCE_ENSEMBLES:
             raise ValueError(f"unknown inference_ensemble {self.inference_ensemble!r}; expected one of {INFERENCE_ENSEMBLES}")
+        if self.counterfactual_policy_temperature <= 0.0:
+            raise ValueError("counterfactual_policy_temperature must be positive")
+        if self.counterfactual_policy_topk < 0:
+            raise ValueError("counterfactual_policy_topk must be non-negative")
+        if self.counterfactual_policy_min_gap < 0.0:
+            raise ValueError("counterfactual_policy_min_gap must be non-negative")
+        if self.counterfactual_value_head_coef < 0.0:
+            raise ValueError("counterfactual_value_head_coef must be non-negative")
+        if self.counterfactual_value_head_clip <= 0.0:
+            raise ValueError("counterfactual_value_head_clip must be positive")
+        if self.counterfactual_value_rank_coef < 0.0:
+            raise ValueError("counterfactual_value_rank_coef must be non-negative")
+        if self.counterfactual_value_target_mode not in {"raw", "minmax", "zscore", "rank"}:
+            raise ValueError(
+                "counterfactual_value_target_mode must be one of "
+                "{'raw', 'minmax', 'zscore', 'rank'}"
+            )
+        if self.counterfactual_risk_loss_mode not in {"bce", "listwise"}:
+            raise ValueError(
+                "counterfactual_risk_loss_mode must be one of {'bce', 'listwise'}"
+            )
+        if self.guess_survival_coef < 0.0:
+            raise ValueError("guess_survival_coef must be non-negative")
+        if self.guess_survival_mine_weight <= 0.0:
+            raise ValueError("guess_survival_mine_weight must be positive")
+        if self.guess_survival_topk < 0:
+            raise ValueError("guess_survival_topk must be non-negative")
+        if self.guess_survival_margin < 0.0:
+            raise ValueError("guess_survival_margin must be non-negative")
+        if self.behavior_mine_demotion_coef < 0.0:
+            raise ValueError("behavior_mine_demotion_coef must be non-negative")
+        if self.behavior_mine_demotion_topk < 0:
+            raise ValueError("behavior_mine_demotion_topk must be non-negative")
+        if self.behavior_mine_demotion_margin < 0.0:
+            raise ValueError("behavior_mine_demotion_margin must be non-negative")
 
     @property
     def game_config(self) -> GameConfig:
@@ -109,6 +167,208 @@ def center_first_open(game: MinesweeperGame) -> tuple[float, bool]:
     row, col = game.rows // 2, game.cols // 2
     _, reward, done, _ = game.open_cell(row, col)
     return reward, done
+
+
+def transition_sample_weight(transition: EpisodeTransition) -> float:
+    progress = 0.0
+    if transition.global_features.size > 1:
+        progress = float(np.clip(transition.global_features[1], 0.0, 1.0))
+
+    weight = 1.0 + 1.1 * progress
+    if progress >= 0.85:
+        weight += 0.25
+    if transition.expert_is_guess:
+        weight += 0.6
+        if progress >= 0.75:
+            weight += 0.15
+    if transition.done:
+        weight += 0.5
+    if transition.reward < 0.0:
+        weight += min(1.0, -float(transition.reward))
+    if transition.risk_map is not None:
+        weight += 0.25
+    if _transition_behavior_mine(transition):
+        weight += 1.0
+    if transition.extreme_score > 0.0:
+        weight += min(2.0, 0.5 * float(transition.extreme_score))
+    regret = _transition_counterfactual_regret(transition)
+    if regret is not None:
+        weight += min(2.0, 0.6 * regret)
+    rows = int(transition.board.shape[1]) if transition.board.ndim >= 3 else 0
+    cols = int(transition.board.shape[2]) if transition.board.ndim >= 3 else 0
+    cells = rows * cols
+    if cells > 0:
+        kind_index, cell_index = divmod(int(transition.action_index), cells)
+        if kind_index == action_channel(ActionType.OPEN):
+            row, col = divmod(cell_index, cols)
+            is_edge = row in {0, rows - 1} or col in {0, cols - 1}
+            is_corner = row in {0, rows - 1} and col in {0, cols - 1}
+            if is_edge:
+                weight += 0.25
+            if is_corner:
+                weight += 0.25
+    return float(max(weight, 0.1))
+
+
+def _transition_behavior_mine(transition: EpisodeTransition) -> bool:
+    if transition.mine_mask is None or transition.action_mask.ndim != 3:
+        return False
+    rows = int(transition.mine_mask.shape[0])
+    cols = int(transition.mine_mask.shape[1])
+    cells = rows * cols
+    kind_index, cell_index = divmod(int(transition.action_index), cells)
+    if kind_index != action_channel(ActionType.OPEN):
+        return False
+    row, col = divmod(cell_index, cols)
+    if not (0 <= row < rows and 0 <= col < cols):
+        return False
+    return bool(np.asarray(transition.mine_mask, dtype=bool)[row, col])
+
+
+def _transition_counterfactual_regret(transition: EpisodeTransition) -> float | None:
+    values = transition.counterfactual_open_values
+    if values is None:
+        return None
+    value_array = np.asarray(values, dtype=np.float32)
+    finite = np.isfinite(value_array)
+    if value_array.ndim != 2 or not bool(finite.any()):
+        return None
+
+    rows, cols = value_array.shape
+    cells = rows * cols
+    kind_index, cell_index = divmod(int(transition.action_index), cells)
+    if kind_index != action_channel(ActionType.OPEN):
+        return None
+    row, col = divmod(cell_index, cols)
+    if not (0 <= row < rows and 0 <= col < cols):
+        return None
+    behavior_value = float(value_array[row, col])
+    if not np.isfinite(behavior_value):
+        return None
+    return float(max(0.0, float(np.max(value_array[finite])) - behavior_value))
+
+
+def _normalize_counterfactual_values(values: np.ndarray, mode: str) -> np.ndarray:
+    """Normalize finite per-state labels while preserving their ordering."""
+
+    values = np.asarray(values, dtype=np.float32).copy()
+    if mode == "raw":
+        return values
+    if mode not in {"minmax", "zscore", "rank"}:
+        raise ValueError(f"unknown counterfactual value target mode {mode!r}")
+
+    finite = np.isfinite(values)
+    if not bool(finite.any()):
+        return values
+    selected = values[finite]
+    if mode == "minmax":
+        low = float(selected.min())
+        high = float(selected.max())
+        scale = high - low
+        values[finite] = 0.0 if scale <= 1e-6 else (selected - low) / scale
+    elif mode == "zscore":
+        mean_value = float(selected.mean())
+        scale = float(selected.std())
+        values[finite] = (selected - mean_value) / max(scale, 1e-3)
+    else:
+        order = np.argsort(np.argsort(selected, kind="stable"), kind="stable")
+        denominator = max(1, int(selected.size) - 1)
+        values[finite] = order.astype(np.float32) / float(denominator)
+    return values
+
+
+def transition_extreme_profile(
+    transition: EpisodeTransition,
+    *,
+    mines: int = 99,
+    safe_left_threshold: int = 100,
+) -> dict[str, object]:
+    """Classify replay states that deserve targeted endgame/guess training."""
+
+    rows = int(transition.board.shape[-2]) if transition.board.ndim >= 3 else 0
+    cols = int(transition.board.shape[-1]) if transition.board.ndim >= 3 else 0
+    if rows <= 0 or cols <= 0:
+        return {
+            "extreme": False,
+            "family": "invalid",
+            "score": 0.0,
+            "tail": False,
+            "guess": False,
+            "edge": False,
+            "corner": False,
+            "high_risk": False,
+            "safe_left": None,
+        }
+
+    progress = 0.0
+    if transition.global_features.size > 1:
+        progress = float(np.clip(transition.global_features[1], 0.0, 1.0))
+    total_safe = max(1, rows * cols - int(mines))
+    safe_left = max(0, int(round((1.0 - progress) * total_safe)))
+    tail = safe_left <= int(safe_left_threshold)
+
+    cells = rows * cols
+    kind_index, cell_index = divmod(int(transition.action_index), cells)
+    row, col = divmod(cell_index, cols)
+    is_open = kind_index == action_channel(ActionType.OPEN)
+    edge = bool(is_open and (row in {0, rows - 1} or col in {0, cols - 1}))
+    corner = bool(is_open and row in {0, rows - 1} and col in {0, cols - 1})
+    guess = bool(is_open and transition.expert_is_guess)
+
+    risk_value: float | None = None
+    if is_open and transition.risk_map is not None:
+        risk_map = np.asarray(transition.risk_map)
+        if risk_map.ndim == 2 and risk_map.shape == (rows, cols):
+            risk_value = float(risk_map[row, col])
+    high_risk = bool(risk_value is not None and np.isfinite(risk_value) and risk_value >= 0.33)
+
+    score = 0.0
+    if tail:
+        score += 1.0
+    if guess:
+        score += 1.25
+    if edge:
+        score += 0.5
+    if corner:
+        score += 0.75
+    if high_risk:
+        score += 0.75
+
+    if corner and guess and tail:
+        family = "corner_guess_tail"
+    elif edge and guess and tail:
+        family = "edge_guess_tail"
+    elif guess and tail:
+        family = "guess_tail"
+    elif corner and guess:
+        family = "corner_guess"
+    elif edge and guess:
+        family = "edge_guess"
+    elif guess:
+        family = "guess"
+    elif corner and tail:
+        family = "corner_tail"
+    elif edge and tail:
+        family = "edge_tail"
+    elif tail:
+        family = "tail"
+    elif high_risk:
+        family = "high_risk"
+    else:
+        family = "ordinary"
+
+    return {
+        "extreme": bool(score > 0.0),
+        "family": family,
+        "score": float(score),
+        "tail": tail,
+        "guess": guess,
+        "edge": edge,
+        "corner": corner,
+        "high_risk": high_risk,
+        "safe_left": safe_left,
+        "risk": risk_value,
+    }
 
 
 def resolve_forced_moves(
@@ -573,7 +833,10 @@ class MinesweeperTrainer:
         actions = torch.tensor([t.action_index for t in transitions], dtype=torch.long, device=self.device)
         returns = self._discounted_returns([t.reward for t in transitions]).to(self.device)
 
-        logits, values, risk_logits = self.model.forward_with_risk(boards, global_features)
+        logits, values, risk_logits, counterfactual_values = self.model.forward_with_aux(
+            boards,
+            global_features,
+        )
         flat_logits = logits.view(logits.shape[0], -1)
         flat_masks = masks.view(masks.shape[0], -1)
         masked_logits = flat_logits.masked_fill(~flat_masks, -1e9)
@@ -588,14 +851,30 @@ class MinesweeperTrainer:
         policy_loss = -(log_probs * advantages).mean()
         value_loss = F.mse_loss(values, returns)
         solver_imitation_loss = self._expert_policy_loss(masked_logits, transitions, allow_action_fallback=False)
+        counterfactual_loss = self._counterfactual_preference_loss(masked_logits, transitions)
+        counterfactual_policy_loss = self._counterfactual_policy_loss(logits, masks, transitions)
+        counterfactual_value_head_loss = self._counterfactual_value_head_loss(
+            counterfactual_values,
+            masks,
+            transitions,
+        )
         loss = policy_loss + self.config.value_coef * value_loss
         loss = loss + (self.config.solver_imitation_coef if imitation_coef is None else imitation_coef) * solver_imitation_loss
+        loss = loss + self.config.counterfactual_coef * counterfactual_loss
+        loss = loss + self.config.counterfactual_policy_coef * counterfactual_policy_loss
+        loss = loss + self.config.counterfactual_value_head_coef * counterfactual_value_head_loss
         mine_aux_loss = self._mine_auxiliary_loss(logits, masks, transitions)
         risk_supervision_loss = self._risk_supervision_loss(logits, masks, transitions)
         risk_head_loss = self._risk_head_loss(risk_logits, masks, transitions)
+        counterfactual_risk_head_loss = self._counterfactual_risk_head_loss(risk_logits, masks, transitions)
+        guess_survival_loss = self._guess_survival_loss(logits, masks, transitions)
+        behavior_mine_demotion_loss = self._behavior_mine_demotion_loss(logits, masks, transitions)
         loss = loss + self.config.mine_aux_coef * mine_aux_loss
         loss = loss + self.config.risk_supervision_coef * risk_supervision_loss
         loss = loss + self.config.risk_head_coef * risk_head_loss
+        loss = loss + self.config.counterfactual_risk_head_coef * counterfactual_risk_head_loss
+        loss = loss + self.config.guess_survival_coef * guess_survival_loss
+        loss = loss + self.config.behavior_mine_demotion_coef * behavior_mine_demotion_loss
         loss = loss - self.config.entropy_coef * entropy
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -608,9 +887,15 @@ class MinesweeperTrainer:
             "policy_loss": float(policy_loss.detach().cpu()),
             "value_loss": float(value_loss.detach().cpu()),
             "solver_imitation_loss": float(solver_imitation_loss.detach().cpu()),
+            "counterfactual_loss": float(counterfactual_loss.detach().cpu()),
+            "counterfactual_policy_loss": float(counterfactual_policy_loss.detach().cpu()),
+            "counterfactual_value_head_loss": float(counterfactual_value_head_loss.detach().cpu()),
             "mine_aux_loss": float(mine_aux_loss.detach().cpu()),
             "risk_supervision_loss": float(risk_supervision_loss.detach().cpu()),
             "risk_head_loss": float(risk_head_loss.detach().cpu()),
+            "counterfactual_risk_head_loss": float(counterfactual_risk_head_loss.detach().cpu()),
+            "guess_survival_loss": float(guess_survival_loss.detach().cpu()),
+            "behavior_mine_demotion_loss": float(behavior_mine_demotion_loss.detach().cpu()),
             "entropy": float(entropy.detach().cpu()),
         }
 
@@ -623,18 +908,37 @@ class MinesweeperTrainer:
             device=self.device,
         )
         masks = torch.tensor(np.stack([t.action_mask for t in transitions]), dtype=torch.bool, device=self.device)
-        logits, values, risk_logits = self.model.forward_with_risk(boards, global_features)
+        logits, values, risk_logits, counterfactual_values = self.model.forward_with_aux(
+            boards,
+            global_features,
+        )
         flat_logits = logits.view(logits.shape[0], -1)
         flat_masks = masks.view(masks.shape[0], -1)
         masked_logits = flat_logits.masked_fill(~flat_masks, -1e9)
         imitation_loss = self._expert_policy_loss(masked_logits, transitions, allow_action_fallback=True)
+        counterfactual_loss = self._counterfactual_preference_loss(masked_logits, transitions)
+        counterfactual_policy_loss = self._counterfactual_policy_loss(logits, masks, transitions)
+        counterfactual_value_head_loss = self._counterfactual_value_head_loss(
+            counterfactual_values,
+            masks,
+            transitions,
+        )
         mine_aux_loss = self._mine_auxiliary_loss(logits, masks, transitions)
         risk_supervision_loss = self._risk_supervision_loss(logits, masks, transitions)
         risk_head_loss = self._risk_head_loss(risk_logits, masks, transitions)
+        counterfactual_risk_head_loss = self._counterfactual_risk_head_loss(risk_logits, masks, transitions)
+        guess_survival_loss = self._guess_survival_loss(logits, masks, transitions)
+        behavior_mine_demotion_loss = self._behavior_mine_demotion_loss(logits, masks, transitions)
         loss = imitation_loss * self.config.pretrain_imitation_coef
+        loss = loss + self.config.counterfactual_coef * counterfactual_loss
+        loss = loss + self.config.counterfactual_policy_coef * counterfactual_policy_loss
+        loss = loss + self.config.counterfactual_value_head_coef * counterfactual_value_head_loss
         loss = loss + self.config.mine_aux_coef * mine_aux_loss
         loss = loss + self.config.risk_supervision_coef * risk_supervision_loss
         loss = loss + self.config.risk_head_coef * risk_head_loss
+        loss = loss + self.config.counterfactual_risk_head_coef * counterfactual_risk_head_loss
+        loss = loss + self.config.guess_survival_coef * guess_survival_loss
+        loss = loss + self.config.behavior_mine_demotion_coef * behavior_mine_demotion_loss
         entropy = Categorical(logits=masked_logits).entropy().mean()
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -647,9 +951,15 @@ class MinesweeperTrainer:
             "policy_loss": 0.0,
             "value_loss": 0.0,
             "solver_imitation_loss": float(imitation_loss.detach().cpu()),
+            "counterfactual_loss": float(counterfactual_loss.detach().cpu()),
+            "counterfactual_policy_loss": float(counterfactual_policy_loss.detach().cpu()),
+            "counterfactual_value_head_loss": float(counterfactual_value_head_loss.detach().cpu()),
             "mine_aux_loss": float(mine_aux_loss.detach().cpu()),
             "risk_supervision_loss": float(risk_supervision_loss.detach().cpu()),
             "risk_head_loss": float(risk_head_loss.detach().cpu()),
+            "counterfactual_risk_head_loss": float(counterfactual_risk_head_loss.detach().cpu()),
+            "guess_survival_loss": float(guess_survival_loss.detach().cpu()),
+            "behavior_mine_demotion_loss": float(behavior_mine_demotion_loss.detach().cpu()),
             "entropy": float(entropy.detach().cpu()),
         }
 
@@ -659,6 +969,26 @@ class MinesweeperTrainer:
         transitions: list[EpisodeTransition],
         allow_action_fallback: bool,
     ) -> torch.Tensor:
+        if self.config.counterfactual_only_guess:
+            keep = np.asarray(
+                [
+                    not (
+                        transition.expert_is_guess
+                        and transition.counterfactual_open_values is not None
+                    )
+                    for transition in transitions
+                ],
+                dtype=bool,
+            )
+            if not bool(keep.any()):
+                return masked_logits.new_tensor(0.0)
+            transitions = [
+                transition
+                for transition, include in zip(transitions, keep.tolist(), strict=True)
+                if include
+            ]
+            masked_logits = masked_logits[torch.from_numpy(keep).to(self.device)]
+
         expert_weights = torch.tensor(
             np.stack(
                 [
@@ -698,12 +1028,292 @@ class MinesweeperTrainer:
             "policy_loss": 0.0,
             "value_loss": 0.0,
             "solver_imitation_loss": 0.0,
+            "counterfactual_loss": 0.0,
+            "counterfactual_policy_loss": 0.0,
+            "counterfactual_value_head_loss": 0.0,
             "dagger_loss": 0.0,
             "mine_aux_loss": 0.0,
             "risk_supervision_loss": 0.0,
             "risk_head_loss": 0.0,
+            "counterfactual_risk_head_loss": 0.0,
+            "guess_survival_loss": 0.0,
+            "behavior_mine_demotion_loss": 0.0,
             "entropy": 0.0,
         }
+
+    def _counterfactual_preference_loss(
+        self,
+        masked_logits: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        """Prefer offline action outcomes on hard states without using them at inference."""
+
+        if self.config.counterfactual_coef <= 0.0:
+            return masked_logits.new_tensor(0.0)
+
+        losses: list[torch.Tensor] = []
+        margin = float(self.config.counterfactual_margin)
+        temperature = max(float(self.config.counterfactual_temperature), 1e-6)
+        for row_index, transition in enumerate(transitions):
+            if transition.counterfactual_open_values is not None:
+                open_channel = action_channel(ActionType.OPEN)
+                open_mask = transition.action_mask[open_channel]
+                values = np.asarray(transition.counterfactual_open_values, dtype=np.float32)
+                valid = open_mask & np.isfinite(values)
+                if bool(valid.any()):
+                    cells = self.config.rows * self.config.cols
+                    behavior_index = int(transition.action_index)
+                    behavior_kind = behavior_index // cells
+                    if behavior_kind != open_channel:
+                        continue
+                    behavior_cell_index = behavior_index % cells
+                    flat_valid = valid.reshape(-1)
+                    flat_values = values.reshape(-1)
+                    if not bool(flat_valid.any()):
+                        continue
+
+                    if flat_valid[behavior_cell_index]:
+                        behavior_value = float(flat_values[behavior_cell_index])
+                    else:
+                        behavior_value = float(np.nanmin(flat_values[flat_valid]))
+
+                    candidate_cells = np.flatnonzero(flat_valid & (flat_values > behavior_value + margin))
+                    if candidate_cells.size == 0:
+                        continue
+                    if candidate_cells.size > 8:
+                        order = np.argsort(flat_values[candidate_cells])[::-1][:8]
+                        candidate_cells = candidate_cells[order]
+
+                    open_offset = open_channel * cells
+                    candidate_indices = torch.tensor(open_offset + candidate_cells, dtype=torch.long, device=self.device)
+                    candidate_scores = masked_logits[row_index][candidate_indices]
+                    behavior_score = masked_logits[row_index, behavior_index]
+                    weights = torch.tensor(
+                        np.clip(flat_values[candidate_cells] - behavior_value, 0.0, 8.0),
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
+                    if float(weights.sum()) > 0.0:
+                        weights = weights / weights.sum().clamp_min(1.0)
+                        losses.append((F.softplus(behavior_score - candidate_scores + margin) * weights).sum())
+                    else:
+                        losses.append(F.softplus(behavior_score - candidate_scores + margin).mean())
+                    continue
+
+            expert_mask = _transition_expert_mask(transition, allow_action_fallback=True)
+            expert_flat = expert_mask.reshape(-1) & transition.action_mask.reshape(-1)
+            behavior_index = int(transition.action_index)
+            if not expert_flat.any() or not transition.action_mask.reshape(-1)[behavior_index]:
+                continue
+            if expert_flat[behavior_index]:
+                continue
+
+            expert_scores = masked_logits[row_index][torch.from_numpy(expert_flat).to(self.device)]
+            behavior_score = masked_logits[row_index, behavior_index]
+            target_score = expert_scores.max()
+            losses.append(F.softplus(behavior_score - target_score + margin))
+
+        if not losses:
+            return masked_logits.new_tensor(0.0)
+        return torch.stack(losses).mean()
+
+    def _counterfactual_policy_loss(
+        self,
+        logits: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        """Fit open-candidate probabilities to offline outcome labels on hard states."""
+
+        if self.config.counterfactual_policy_coef <= 0.0:
+            return logits.new_tensor(0.0)
+
+        open_channel = action_channel(ActionType.OPEN)
+        open_logits = logits[:, open_channel, :, :].reshape(logits.shape[0], -1)
+        open_masks = masks[:, open_channel, :, :].reshape(masks.shape[0], -1)
+        flat_logits = logits.reshape(logits.shape[0], -1)
+        flat_masks = masks.reshape(masks.shape[0], -1)
+        temperature = max(float(self.config.counterfactual_policy_temperature), 1e-6)
+        topk = int(self.config.counterfactual_policy_topk)
+        min_gap = float(self.config.counterfactual_policy_min_gap)
+        losses: list[torch.Tensor] = []
+        row_weights: list[float] = []
+
+        for row_index, transition in enumerate(transitions):
+            values = transition.counterfactual_open_values
+            if values is None:
+                continue
+
+            flat_values = np.asarray(values, dtype=np.float32).reshape(-1)
+            flat_open_mask = transition.action_mask[open_channel].reshape(-1)
+            valid = flat_open_mask & np.isfinite(flat_values)
+            if int(valid.sum()) < 2:
+                continue
+            valid_indices = np.flatnonzero(valid)
+            valid_values = flat_values[valid_indices]
+            value_gap = float(np.max(valid_values) - np.min(valid_values))
+            if value_gap < min_gap:
+                continue
+
+            if topk > 0 and valid_indices.size > topk:
+                order = np.argsort(valid_values)[::-1][:topk]
+                valid_indices = valid_indices[order]
+                valid_values = flat_values[valid_indices]
+
+            # Always retain the behavior OPEN cell in the comparison set.
+            # Otherwise a bad behavior action can be truncated away before
+            # training sees the negative label it needs to move away from.
+            behavior_cell = -1
+            behavior_index = int(transition.action_index)
+            behavior_kind = behavior_index // (self.config.rows * self.config.cols)
+            if behavior_kind == open_channel:
+                behavior_cell = behavior_index % (self.config.rows * self.config.cols)
+                if behavior_cell in np.flatnonzero(valid) and behavior_cell not in valid_indices:
+                    valid_indices = np.concatenate(
+                        [valid_indices, np.asarray([behavior_cell], dtype=np.int64)]
+                    )
+                    valid_values = np.concatenate(
+                        [valid_values, np.asarray([flat_values[behavior_cell]], dtype=np.float32)]
+                    )
+
+            indices = torch.tensor(valid_indices, dtype=torch.long, device=self.device)
+            legal = open_masks[row_index, indices]
+            if not bool(legal.any()):
+                continue
+            indices = indices[legal]
+            selected_values = valid_values[legal.detach().cpu().numpy()]
+            if selected_values.size < 2:
+                continue
+
+            if self.config.counterfactual_policy_full_action:
+                full_log_probs = F.log_softmax(
+                    flat_logits[row_index].masked_fill(~flat_masks[row_index], -1e9),
+                    dim=0,
+                )
+                open_offset = open_channel * (self.config.rows * self.config.cols)
+                student_log_probs = full_log_probs[open_offset + indices]
+            else:
+                student_log_probs = F.log_softmax(open_logits[row_index, indices], dim=0)
+            target_logits = torch.tensor(selected_values, dtype=torch.float32, device=self.device) / temperature
+            target = F.softmax(target_logits, dim=0)
+            policy_loss = -(target * student_log_probs).sum()
+
+            # Explicitly push the behavior cell below every labelled cell
+            # with a materially better offline outcome.
+            behavior_positions = np.flatnonzero(
+                indices.detach().cpu().numpy() == behavior_cell
+            )
+            if behavior_positions.size:
+                behavior_position = int(behavior_positions[0])
+                better = selected_values > selected_values[behavior_position] + min_gap
+                if bool(better.any()):
+                    behavior_score = open_logits[row_index, indices[behavior_position]]
+                    better_scores = open_logits[
+                        row_index,
+                        indices[torch.from_numpy(better).to(self.device)],
+                    ]
+                    policy_loss = policy_loss + F.softplus(
+                        behavior_score - better_scores + min_gap
+                    ).mean()
+
+            losses.append(policy_loss)
+            row_weights.append(float(transition.source_quality) * (1.0 + min(1.0, float(transition.extreme_score))))
+
+        if not losses:
+            return logits.new_tensor(0.0)
+        weights = torch.tensor(row_weights, dtype=torch.float32, device=self.device).clamp_min(0.05)
+        stacked = torch.stack(losses)
+        return (stacked * weights).sum() / weights.sum().clamp_min(1.0)
+
+    def _counterfactual_value_head_loss(
+        self,
+        counterfactual_values: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        """Regress offline OPEN outcomes into a model-only spatial value head."""
+
+        if self.config.counterfactual_value_head_coef <= 0.0:
+            return counterfactual_values.new_tensor(0.0)
+
+        targets = np.full(
+            (len(transitions), self.config.rows, self.config.cols),
+            np.nan,
+            dtype=np.float32,
+        )
+        row_weights: list[float] = []
+        for index, transition in enumerate(transitions):
+            if transition.counterfactual_open_values is not None:
+                targets[index] = _normalize_counterfactual_values(
+                    np.asarray(transition.counterfactual_open_values, dtype=np.float32),
+                    self.config.counterfactual_value_target_mode,
+                )
+            row_weights.append(
+                float(transition.source_quality)
+                * (1.0 + min(1.0, float(transition.extreme_score)))
+            )
+
+        target_tensor = torch.tensor(
+            np.nan_to_num(
+                np.clip(
+                    targets,
+                    -float(self.config.counterfactual_value_head_clip),
+                    float(self.config.counterfactual_value_head_clip),
+                ),
+                nan=0.0,
+            ),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        valid = torch.tensor(
+            np.isfinite(targets),
+            dtype=torch.bool,
+            device=self.device,
+        )
+        valid = valid & masks[:, action_channel(ActionType.OPEN), :, :]
+        if not bool(valid.any()):
+            return counterfactual_values.new_tensor(0.0)
+
+        prediction = counterfactual_values
+        element_loss = F.smooth_l1_loss(prediction, target_tensor, reduction="none")
+        row_mask = valid.view(valid.shape[0], -1).any(dim=1)
+        weights = torch.tensor(row_weights, dtype=torch.float32, device=self.device)
+        weights = weights[row_mask].clamp_min(0.05)
+        row_loss = (element_loss * valid).view(valid.shape[0], -1).sum(dim=1)
+        row_count = valid.view(valid.shape[0], -1).sum(dim=1).clamp_min(1)
+        row_loss = row_loss / row_count
+        regression_loss = (row_loss[row_mask] * weights).sum() / weights.sum().clamp_min(1.0)
+        if self.config.counterfactual_value_rank_coef <= 0.0:
+            return regression_loss
+
+        # The downstream use is a candidate ranking decision, so add a
+        # pairwise objective over the labelled cells instead of relying only
+        # on absolute-value regression.
+        ranking_losses: list[torch.Tensor] = []
+        full_weights = torch.tensor(row_weights, dtype=torch.float32, device=self.device).clamp_min(0.05)
+        for index in torch.nonzero(row_mask, as_tuple=False).flatten().tolist():
+            cells = torch.nonzero(valid[index].view(-1), as_tuple=False).flatten()
+            if cells.numel() < 2:
+                continue
+            target_values = target_tensor[index].view(-1)[cells]
+            prediction_values = prediction[index].view(-1)[cells]
+            order = torch.argsort(target_values, descending=True)
+            target_values = target_values[order]
+            prediction_values = prediction_values[order]
+            pair_limit = min(16, int(target_values.numel()))
+            top = prediction_values[:pair_limit]
+            bottom = prediction_values[-pair_limit:]
+            target_gap = target_values[:pair_limit].unsqueeze(1) - target_values[-pair_limit:].unsqueeze(0)
+            pair_mask = target_gap > 0.0
+            if not bool(pair_mask.any()):
+                continue
+            score_gap = top.unsqueeze(1) - bottom.unsqueeze(0)
+            pair_loss = F.softplus(-score_gap)[pair_mask]
+            ranking_losses.append(pair_loss.mean() * full_weights[index])
+        if not ranking_losses:
+            return regression_loss
+        ranking_loss = torch.stack(ranking_losses).sum() / full_weights[row_mask].sum().clamp_min(1.0)
+        return regression_loss + float(self.config.counterfactual_value_rank_coef) * ranking_loss
 
     def _mine_auxiliary_loss(
         self,
@@ -713,11 +1323,14 @@ class MinesweeperTrainer:
     ) -> torch.Tensor:
         if self.config.mine_aux_coef <= 0.0:
             return logits.new_tensor(0.0)
+        # A full mine mask is useful for post-game diagnostics, but it is not
+        # observable during play. Prefer the solver's visible-information risk
+        # map whenever one is available so training does not memorize hidden layouts.
         mine_targets = torch.tensor(
             np.stack(
                 [
                     np.zeros((self.config.rows, self.config.cols), dtype=bool)
-                    if transition.mine_mask is None
+                    if transition.mine_mask is None or transition.risk_map is not None
                     else transition.mine_mask
                     for transition in transitions
                 ]
@@ -726,7 +1339,7 @@ class MinesweeperTrainer:
             device=self.device,
         )
         known_targets = torch.tensor(
-            [transition.mine_mask is not None for transition in transitions],
+            [transition.mine_mask is not None and transition.risk_map is None for transition in transitions],
             dtype=torch.bool,
             device=self.device,
         ).view(-1, 1, 1)
@@ -796,9 +1409,9 @@ class MinesweeperTrainer:
                     np.zeros((self.config.rows, self.config.cols), dtype=np.float32)
                     if transition.mine_mask is None and transition.risk_map is None
                     else (
-                        transition.mine_mask.astype(np.float32)
-                        if transition.mine_mask is not None
-                        else transition.risk_map.astype(np.float32)
+                        transition.risk_map.astype(np.float32)
+                        if transition.risk_map is not None
+                        else transition.mine_mask.astype(np.float32)
                     )
                     for transition in transitions
                 ]
@@ -807,7 +1420,7 @@ class MinesweeperTrainer:
             device=self.device,
         )
         target_valid = torch.tensor(
-            [transition.mine_mask is not None or transition.risk_map is not None for transition in transitions],
+            [transition.risk_map is not None or transition.mine_mask is not None for transition in transitions],
             dtype=torch.bool,
             device=self.device,
         ).view(-1, 1, 1)
@@ -818,6 +1431,224 @@ class MinesweeperTrainer:
 
         return F.binary_cross_entropy_with_logits(risk_logits[:, 0][valid], risk_targets[valid])
 
+    def _counterfactual_risk_head_loss(
+        self,
+        risk_logits: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        if self.config.counterfactual_risk_head_coef <= 0.0:
+            return risk_logits.new_tensor(0.0)
+
+        open_channel = action_channel(ActionType.OPEN)
+        target_rows: list[np.ndarray] = []
+        valid_rows: list[np.ndarray] = []
+        for transition in transitions:
+            values = transition.counterfactual_open_values
+            if values is None:
+                target_rows.append(np.zeros((self.config.rows, self.config.cols), dtype=np.float32))
+                valid_rows.append(np.zeros((self.config.rows, self.config.cols), dtype=bool))
+                continue
+
+            values = np.asarray(values, dtype=np.float32)
+            open_mask = transition.action_mask[open_channel] & np.isfinite(values)
+            if not bool(open_mask.any()):
+                target_rows.append(np.zeros((self.config.rows, self.config.cols), dtype=np.float32))
+                valid_rows.append(open_mask)
+                continue
+
+            finite_values = values[open_mask]
+            best_value = float(np.max(finite_values))
+            temperature = max(float(self.config.counterfactual_risk_temperature), 1e-6)
+            # Better counterfactual outcomes should look safer to the risk head.
+            normalized_badness = np.clip((best_value - values) / temperature, 0.0, 12.0)
+            targets = 1.0 - np.exp(-normalized_badness)
+            target_rows.append(targets.astype(np.float32))
+            valid_rows.append(open_mask)
+
+        valid = torch.tensor(np.stack(valid_rows), dtype=torch.bool, device=self.device) & masks[:, open_channel, :, :]
+        if not bool(valid.any()):
+            return risk_logits.new_tensor(0.0)
+        targets = torch.tensor(np.stack(target_rows), dtype=torch.float32, device=self.device)
+        if self.config.counterfactual_risk_loss_mode == "bce":
+            return F.binary_cross_entropy_with_logits(risk_logits[:, 0][valid], targets[valid])
+
+        # Rank candidates within each state so large ordinary safe regions do
+        # not drown out the few decisions that determine whether a guess wins.
+        temperature = max(float(self.config.counterfactual_risk_temperature), 1e-6)
+        row_losses: list[torch.Tensor] = []
+        for row_index, transition in enumerate(transitions):
+            row_valid = valid[row_index].view(-1)
+            if int(row_valid.sum()) < 2 or transition.counterfactual_open_values is None:
+                continue
+            values = np.asarray(transition.counterfactual_open_values, dtype=np.float32).reshape(-1)
+            valid_indices = np.flatnonzero(row_valid.detach().cpu().numpy())
+            row_values = torch.tensor(values[valid_indices], dtype=risk_logits.dtype, device=self.device)
+            row_risk = risk_logits[row_index, 0].reshape(-1)[row_valid]
+            target = F.softmax((row_values - row_values.max()) / temperature, dim=0)
+            log_quality = F.log_softmax(-row_risk / temperature, dim=0)
+            row_losses.append(-(target * log_quality).sum())
+        if not row_losses:
+            return risk_logits.new_tensor(0.0)
+        return torch.stack(row_losses).mean()
+
+    def _guess_survival_loss(
+        self,
+        logits: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        if self.config.guess_survival_coef <= 0.0:
+            return logits.new_tensor(0.0)
+
+        open_channel = action_channel(ActionType.OPEN)
+        row_losses: list[torch.Tensor] = []
+        row_weights: list[float] = []
+        for row_index, transition in enumerate(transitions):
+            if transition.mine_mask is None or not transition.expert_is_guess:
+                continue
+
+            mine_mask = np.asarray(transition.mine_mask, dtype=bool)
+            if mine_mask.shape != (self.config.rows, self.config.cols):
+                continue
+            open_mask = np.asarray(transition.action_mask[open_channel], dtype=bool)
+            if open_mask.shape != mine_mask.shape:
+                continue
+
+            safe_mask = torch.tensor(open_mask & ~mine_mask, dtype=torch.bool, device=self.device)
+            mine_mask_t = torch.tensor(open_mask & mine_mask, dtype=torch.bool, device=self.device)
+            if not bool(safe_mask.any()) and not bool(mine_mask_t.any()):
+                continue
+
+            open_logits = logits[row_index, open_channel, :, :]
+            row_loss = open_logits.new_tensor(0.0)
+            if bool(safe_mask.any()) and bool(mine_mask_t.any()):
+                safe_logits = open_logits[safe_mask]
+                mine_logits = open_logits[mine_mask_t]
+                topk = int(self.config.guess_survival_topk)
+                if topk > 0:
+                    safe_logits = torch.topk(safe_logits, k=min(topk, int(safe_logits.numel()))).values
+                    mine_logits = torch.topk(mine_logits, k=min(topk, int(mine_logits.numel()))).values
+                margin = float(self.config.guess_survival_margin)
+                row_loss = row_loss + self.config.guess_survival_mine_weight * F.softplus(
+                    mine_logits[:, None] - safe_logits[None, :] + margin
+                ).mean()
+                safe_target = torch.ones_like(safe_logits)
+                mine_target = torch.zeros_like(mine_logits)
+                row_loss = row_loss + 0.05 * F.binary_cross_entropy_with_logits(safe_logits, safe_target)
+                row_loss = row_loss + 0.05 * self.config.guess_survival_mine_weight * F.binary_cross_entropy_with_logits(
+                    mine_logits,
+                    mine_target,
+                )
+            elif bool(safe_mask.any()):
+                safe_target = torch.ones_like(open_logits[safe_mask])
+                row_loss = row_loss + 0.1 * F.binary_cross_entropy_with_logits(
+                    open_logits[safe_mask],
+                    safe_target,
+                )
+            elif bool(mine_mask_t.any()):
+                mine_target = torch.zeros_like(open_logits[mine_mask_t])
+                row_loss = row_loss + 0.1 * self.config.guess_survival_mine_weight * F.binary_cross_entropy_with_logits(
+                    open_logits[mine_mask_t],
+                    mine_target,
+                )
+            non_open_mask = np.asarray(transition.action_mask[1:], dtype=bool)
+            if bool(non_open_mask.any()) and bool(safe_mask.any()):
+                non_open_logits = logits[row_index, 1:, :, :].reshape(-1)
+                legal_non_open = torch.tensor(non_open_mask.reshape(-1), dtype=torch.bool, device=self.device)
+                if bool(legal_non_open.any()):
+                    safe_score = open_logits[safe_mask].amax()
+                    non_open_score = non_open_logits[legal_non_open].amax()
+                    row_loss = row_loss + 0.5 * F.softplus(non_open_score - safe_score)
+
+            row_losses.append(row_loss)
+            row_weights.append(
+                float(transition.source_quality)
+                * (1.0 + min(1.0, float(transition.extreme_score)))
+            )
+
+        if not row_losses:
+            return logits.new_tensor(0.0)
+
+        weights = torch.tensor(row_weights, dtype=logits.dtype, device=self.device).clamp_min(0.05)
+        return (torch.stack(row_losses) * weights).sum() / weights.sum().clamp_min(1.0)
+
+    def _behavior_mine_demotion_loss(
+        self,
+        logits: torch.Tensor,
+        masks: torch.Tensor,
+        transitions: list[EpisodeTransition],
+    ) -> torch.Tensor:
+        """Demote only the OPEN action that the policy actually took on a mine.
+
+        This keeps the correction narrow: the hidden mine layout is used only
+        offline to identify a bad behavior action, while better alternatives
+        come from labelled counterfactual OPEN values for the same visible
+        state.
+        """
+
+        if self.config.behavior_mine_demotion_coef <= 0.0:
+            return logits.new_tensor(0.0)
+
+        open_channel = action_channel(ActionType.OPEN)
+        cells = self.config.rows * self.config.cols
+        margin = float(self.config.behavior_mine_demotion_margin)
+        topk = int(self.config.behavior_mine_demotion_topk)
+        row_losses: list[torch.Tensor] = []
+        row_weights: list[float] = []
+        open_logits = logits[:, open_channel, :, :].reshape(logits.shape[0], -1)
+        open_masks = masks[:, open_channel, :, :].reshape(masks.shape[0], -1)
+
+        for row_index, transition in enumerate(transitions):
+            if transition.counterfactual_open_values is None or not _transition_behavior_mine(transition):
+                continue
+
+            behavior_index = int(transition.action_index)
+            behavior_kind, behavior_cell = divmod(behavior_index, cells)
+            if behavior_kind != open_channel or not (0 <= behavior_cell < cells):
+                continue
+            if not bool(open_masks[row_index, behavior_cell]):
+                continue
+
+            flat_values = np.asarray(transition.counterfactual_open_values, dtype=np.float32).reshape(-1)
+            finite = np.isfinite(flat_values)
+            valid = np.asarray(transition.action_mask[open_channel], dtype=bool).reshape(-1) & finite
+            if not bool(valid[behavior_cell]):
+                continue
+
+            behavior_value = float(flat_values[behavior_cell])
+            better = valid & (flat_values > behavior_value + margin)
+            if not bool(better.any()):
+                continue
+
+            better_cells = np.flatnonzero(better)
+            better_values = flat_values[better_cells]
+            if topk > 0 and better_cells.size > topk:
+                order = np.argsort(better_values)[::-1][:topk]
+                better_cells = better_cells[order]
+                better_values = better_values[order]
+
+            better_indices = torch.tensor(better_cells, dtype=torch.long, device=self.device)
+            better_scores = open_logits[row_index, better_indices]
+            behavior_score = open_logits[row_index, behavior_cell]
+            value_gaps = torch.tensor(
+                np.clip(better_values - behavior_value, 0.0, 8.0),
+                dtype=logits.dtype,
+                device=self.device,
+            )
+            weights = value_gaps / value_gaps.sum().clamp_min(1e-6)
+            row_losses.append((F.softplus(behavior_score - better_scores + margin) * weights).sum())
+            row_weights.append(
+                float(transition.source_quality)
+                * (1.0 + min(1.0, float(transition.extreme_score)))
+                * (1.0 + min(1.0, max(0.0, behavior_value * -1.0)))
+            )
+
+        if not row_losses:
+            return logits.new_tensor(0.0)
+        weights = torch.tensor(row_weights, dtype=logits.dtype, device=self.device).clamp_min(0.05)
+        return (torch.stack(row_losses) * weights).sum() / weights.sum().clamp_min(1.0)
+
     def _sample_transitions(
         self,
         transitions: list[EpisodeTransition],
@@ -825,7 +1656,12 @@ class MinesweeperTrainer:
     ) -> list[EpisodeTransition]:
         if batch_size <= 0 or len(transitions) <= batch_size:
             return list(transitions)
-        indices = self.rng.choice(len(transitions), size=batch_size, replace=False)
+        weights = np.asarray([transition_sample_weight(transition) for transition in transitions], dtype=np.float64)
+        total = float(weights.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            indices = self.rng.choice(len(transitions), size=batch_size, replace=False)
+        else:
+            indices = self.rng.choice(len(transitions), size=batch_size, replace=False, p=weights / total)
         return [transitions[int(index)] for index in indices]
 
     def _augment_transitions(self, transitions: list[EpisodeTransition]) -> list[EpisodeTransition]:
@@ -914,6 +1750,47 @@ class MinesweeperTrainer:
         )
         adjusted = self._apply_model_risk_prior(logits, risk_logits)
         return adjusted.view(boards.shape[0], -1).masked_fill(~flat_masks, -1e9)
+
+    def _predict_counterfactual_values_batch(
+        self,
+        boards: np.ndarray,
+        global_features_batch: np.ndarray,
+        use_flip_ensemble: bool,
+    ) -> torch.Tensor:
+        if not use_flip_ensemble:
+            board_t = torch.tensor(boards, dtype=torch.float32, device=self.device)
+            global_t = torch.tensor(global_features_batch, dtype=torch.float32, device=self.device)
+            _policy, _value, _risk, counterfactual = self.model.forward_with_aux(board_t, global_t)
+            return counterfactual
+
+        transforms = [(False, False), (True, False), (False, True), (True, True)]
+        transformed_boards = np.concatenate(
+            [
+                np.stack(
+                    [
+                        _flip_board(board, self.config.rows, self.config.cols, flip_vertical, flip_horizontal)
+                        for board in boards
+                    ]
+                )
+                for flip_vertical, flip_horizontal in transforms
+            ],
+            axis=0,
+        )
+        transformed_globals = np.concatenate([global_features_batch for _ in transforms], axis=0)
+        board_t = torch.tensor(transformed_boards, dtype=torch.float32, device=self.device)
+        global_t = torch.tensor(transformed_globals, dtype=torch.float32, device=self.device)
+        _policy, _value, _risk, counterfactual = self.model.forward_with_aux(board_t, global_t)
+        values_by_transform = counterfactual.view(
+            len(transforms),
+            boards.shape[0],
+            counterfactual.shape[-2],
+            counterfactual.shape[-1],
+        )
+        values = [
+            _unflip_policy_logits(values_by_transform[index], flip_vertical, flip_horizontal)
+            for index, (flip_vertical, flip_horizontal) in enumerate(transforms)
+        ]
+        return torch.stack(values, dim=0).mean(dim=0)
 
     def _predict_policy_risk_logits_batch(
         self,
@@ -1411,7 +2288,10 @@ def load_checkpoint(
                 "Train a new checkpoint with `python -m minesweeper_rl.cli train`."
             ) from fallback_exc
     if "optimizer" in checkpoint and not partial_model_load:
-        trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+        try:
+            trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+        except (ValueError, RuntimeError):
+            pass
     return trainer
 
 
@@ -1506,7 +2386,7 @@ def _flip_transition(
     flip_vertical: bool,
     flip_horizontal: bool,
 ) -> EpisodeTransition:
-        return EpisodeTransition(
+    return EpisodeTransition(
         board=_flip_board(transition.board, rows, cols, flip_vertical, flip_horizontal),
         global_features=transition.global_features.copy(),
         action_mask=_flip_spatial(transition.action_mask, flip_vertical, flip_horizontal),
@@ -1525,7 +2405,13 @@ def _flip_transition(
         risk_map=None
         if transition.risk_map is None
         else _flip_spatial(transition.risk_map, flip_vertical, flip_horizontal),
+        counterfactual_open_values=None
+        if transition.counterfactual_open_values is None
+        else _flip_spatial(transition.counterfactual_open_values, flip_vertical, flip_horizontal),
         expert_is_guess=transition.expert_is_guess,
+        source_quality=transition.source_quality,
+        extreme_score=transition.extreme_score,
+        extreme_family=transition.extreme_family,
     )
 
 

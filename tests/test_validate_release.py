@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import subprocess
@@ -22,7 +22,7 @@ def completed(command: Sequence[str], returncode: int = 0) -> subprocess.Complet
 
 def test_build_release_checks_includes_full_gate_by_default() -> None:
     checks = release_validator.build_release_checks(
-        expected_tests=147,
+        expected_tests=160,
         skip_tests=False,
         skip_evidence=False,
         skip_claims=False,
@@ -38,16 +38,25 @@ def test_build_release_checks_includes_full_gate_by_default() -> None:
         "statistics",
         "claims",
         "artifact_manifest",
+        "experiment_database",
+        "database_analysis",
+        "training_feedback_plan",
+        "training_feedback_dataset",
     ]
     doc_command = checks[2].command
     assert "--expected-tests" in doc_command
-    assert "147" in doc_command
+    assert "160" in doc_command
     assert "--check-artifacts" in doc_command
     assert "scripts/validate_release.py" in checks[0].command
     assert "scripts/generate_statistical_report.py" in checks[0].command
     assert "scripts/validate_claims.py" in checks[0].command
-    assert checks[-2].id == "claims"
-    assert "artifacts/report_assets/claim_audit.json" in checks[-2].command
+    assert "scripts/build_experiment_database.py" in checks[0].command
+    assert "scripts/analyze_experiment_database.py" in checks[0].command
+    assert "scripts/generate_training_feedback_plan.py" in checks[0].command
+    assert "scripts/export_training_feedback_dataset.py" in checks[0].command
+    assert checks[5].id == "claims"
+    assert "artifacts/report_assets/claim_audit.json" in checks[5].command
+    assert checks[7].command[-2:] == ["--include-actions", "streak"]
 
 
 def test_validate_release_reports_fail_fast_result() -> None:
@@ -60,7 +69,7 @@ def test_validate_release_reports_fail_fast_result() -> None:
         return completed(command)
 
     report = release_validator.validate_release(
-        expected_tests=147,
+        expected_tests=160,
         fail_fast=True,
         runner=runner,
     )
@@ -76,7 +85,7 @@ def test_validate_release_dry_run_skips_commands() -> None:
         raise AssertionError(f"unexpected command: {command}")
 
     report = release_validator.validate_release(
-        expected_tests=147,
+        expected_tests=160,
         skip_tests=True,
         skip_evidence=True,
         skip_claims=True,

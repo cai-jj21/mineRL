@@ -13,4 +13,5 @@ runs/
 *.pt
 *.pth
 *.onnx
+*.zip
 *.egg-info/

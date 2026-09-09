@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -20,7 +20,7 @@ def write_text(path: Path, text: str = "ok") -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def create_docs(root: Path, test_count: int = 147) -> None:
+def create_docs(root: Path, test_count: int = 160) -> None:
     for path in doc_validator.REQUIRED_FILES:
         write_text(root / path)
     write_text(
@@ -32,18 +32,26 @@ def create_docs(root: Path, test_count: int = 147) -> None:
                 "[ABLATION_STUDY.md](ABLATION_STUDY.md)",
                 "[DEMO_GUIDE.md](DEMO_GUIDE.md)",
                 "[INTERVIEW_QA.md](INTERVIEW_QA.md)",
+                "[DATA_DEVELOPMENT_CASE.md](DATA_DEVELOPMENT_CASE.md)",
                 "[EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)",
                 "[PROJECT_ONE_PAGER.md](PROJECT_ONE_PAGER.md)",
                 "[PROJECT_COMPLETION_AUDIT.md](PROJECT_COMPLETION_AUDIT.md)",
                 "[REPRODUCIBILITY.md](REPRODUCIBILITY.md)",
                 "[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)",
-                "ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md INTERVIEW_QA.md EVALUATION_PROTOCOL.md PROJECT_ONE_PAGER.md PROJECT_COMPLETION_AUDIT.md PROJECT_REPORT.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md MODEL_CARD.md ARTIFACTS.md",
+                "ARCHITECTURE.md ABLATION_STUDY.md DEMO_GUIDE.md INTERVIEW_QA.md DATA_DEVELOPMENT_CASE.md EVALUATION_PROTOCOL.md PROJECT_ONE_PAGER.md PROJECT_COMPLETION_AUDIT.md PROJECT_REPORT.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md MODEL_CARD.md ARTIFACTS.md",
                 "EXPERIMENT_MANIFEST.md RELEASE_CHECKLIST.md",
                 "scripts/validate_documentation.py",
                 "scripts/validate_release.py",
                 "scripts/generate_statistical_report.py",
                 "scripts/validate_claims.py",
-                f"当前 `{test_count}` 项测试",
+                "scripts/build_experiment_database.py",
+                "scripts/analyze_experiment_database.py",
+                "scripts/generate_training_feedback_plan.py",
+                "scripts/export_training_feedback_dataset.py",
+                "sql/warehouse_analysis.sql",
+                f"当前 `{test_count}` 项测试通过",
+                "495 完成局",
+                "952 完成局",
             ]
         ),
     )
@@ -65,8 +73,28 @@ def create_docs(root: Path, test_count: int = 147) -> None:
         root / "INTERVIEW_QA.md",
         "solver 不参与动作选择 --solver-assist none --solver-safety-filter none "
         "43.0% 40.40% 39.60% 495 完成局 952 完成局 不是稳定超过 40% "
-        "game_747 game_756 PROJECT_REPORT.md RESUME_PROJECT_CARD.md "
-        "scripts/validate_project_evidence.py scripts/validate_claims.py scripts/validate_release.py",
+        "game_747 game_756 PROJECT_REPORT.md RESUME_PROJECT_CARD.md DATA_DEVELOPMENT_CASE.md "
+        "scripts/validate_project_evidence.py scripts/validate_claims.py scripts/validate_release.py "
+        "scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py "
+        "sql/warehouse_analysis.sql",
+    )
+    write_text(
+        root / "DATA_DEVELOPMENT_CASE.md",
+        "数据采集 ETL 质量校验 指标汇总 可复现报告 "
+        "scripts/summarize_windows_games.py scripts/generate_report_assets.py "
+        "scripts/generate_statistical_report.py scripts/validate_project_evidence.py "
+        "scripts/validate_claims.py scripts/validate_release.py "
+        "scripts/build_experiment_database.py scripts/analyze_experiment_database.py "
+        "scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py "
+        "per_game_summary.json minesweeper_experiments.sqlite database_analysis.md database_analysis.json "
+        "training_feedback_plan.json training_feedback_plan.md training_feedback_dataset.json training_feedback_dataset.jsonl training_feedback_dataset.md claim_audit.json artifact_manifest.json analysis.json "
+        "failure_analysis_summary.json ODS DWD DWS ADS "
+        "etl_batch source_file diagnostic_runs diagnostic_game_detail diagnostic_signal "
+        "diagnostic_recommendation failure_analysis_run failure_endgame_bucket failure_exact_limit "
+        "v_ods_source_inventory v_dwd_game_session v_dwd_action_event "
+        "v_dws_run_kpi v_ads_experiment_dashboard v_ads_diagnostic_signal_profile v_ads_failure_training_signal "
+        "sql/warehouse_analysis.sql 43.0% 40.40% 39.60% "
+        "495 完成局 952 完成局 game_747 game_756 不是稳定超过 40%",
     )
     write_text(
         root / "EVALUATION_PROTOCOL.md",
@@ -84,33 +112,33 @@ def create_docs(root: Path, test_count: int = 147) -> None:
     )
     write_text(
         root / "PROJECT_REPORT.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py 25 / 25 10 连胜 {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md DATA_DEVELOPMENT_CASE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py scripts/build_experiment_database.py scripts/analyze_experiment_database.py scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py 25 / 25 10 连胜 {test_count} 495 个完成局 952 个完成局",
     )
     write_text(
         root / "REPRODUCIBILITY.md",
         "\n".join(
             [
-                "ARCHITECTURE.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md scripts/validate_project_evidence.py scripts/build_artifact_manifest.py scripts/validate_release.py",
-                "scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py .github/workflows/ci.yml",
-                "RELEASE_CHECKLIST.md ARTIFACTS.md 25",
+                "ARCHITECTURE.md DATA_DEVELOPMENT_CASE.md DEMO_GUIDE.md EVALUATION_PROTOCOL.md scripts/validate_project_evidence.py scripts/build_artifact_manifest.py scripts/validate_release.py",
+                "scripts/summarize_failure_analysis.py scripts/generate_statistical_report.py scripts/validate_claims.py scripts/build_experiment_database.py scripts/analyze_experiment_database.py scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py .github/workflows/ci.yml",
+                "sql/warehouse_analysis.sql RELEASE_CHECKLIST.md ARTIFACTS.md 25",
                 f"{test_count} passed",
             ]
         ),
     )
     write_text(
         root / "RESUME_PROJECT_CARD.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md RELEASE_CHECKLIST.md scripts/validate_project_evidence.py scripts/build_artifact_manifest.py {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md DATA_DEVELOPMENT_CASE.md EVALUATION_PROTOCOL.md MODEL_CARD.md ARTIFACTS.md FAILURE_ANALYSIS.md REPRODUCIBILITY.md RELEASE_CHECKLIST.md scripts/validate_project_evidence.py scripts/build_experiment_database.py scripts/analyze_experiment_database.py scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py scripts/build_artifact_manifest.py sql/warehouse_analysis.sql {test_count} 495 完成局 952 完成局",
     )
     write_text(
         root / "RELEASE_CHECKLIST.md",
-        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md EVALUATION_PROTOCOL.md scripts/validate_documentation.py scripts/validate_release.py scripts/validate_claims.py MODEL_CARD.md ARTIFACTS.md EXPERIMENT_MANIFEST.md FAILURE_ANALYSIS.md {test_count}",
+        f"ARCHITECTURE.md ABLATION_STUDY.md PROJECT_COMPLETION_AUDIT.md DEMO_GUIDE.md INTERVIEW_QA.md DATA_DEVELOPMENT_CASE.md EVALUATION_PROTOCOL.md scripts/validate_documentation.py scripts/validate_release.py scripts/validate_claims.py scripts/build_experiment_database.py scripts/analyze_experiment_database.py scripts/generate_training_feedback_plan.py scripts/export_training_feedback_dataset.py sql/warehouse_analysis.sql MODEL_CARD.md ARTIFACTS.md EXPERIMENT_MANIFEST.md FAILURE_ANALYSIS.md {test_count}",
     )
 
 
 def test_validate_documentation_accepts_complete_docs(tmp_path: Path) -> None:
-    create_docs(tmp_path, test_count=147)
+    create_docs(tmp_path, test_count=160)
 
-    report = doc_validator.validate_documentation(tmp_path, expected_tests=147)
+    report = doc_validator.validate_documentation(tmp_path, expected_tests=160)
 
     assert report["ok"] is True
     assert report["summary"]["failed"] == 0
@@ -123,7 +151,7 @@ def test_validate_documentation_reports_missing_links_and_stale_counts(tmp_path:
         encoding="utf-8",
     )
 
-    report = doc_validator.validate_documentation(tmp_path, expected_tests=147)
+    report = doc_validator.validate_documentation(tmp_path, expected_tests=160)
 
     assert report["ok"] is False
     failed_ids = set(report["summary"]["failed_ids"])
@@ -132,7 +160,7 @@ def test_validate_documentation_reports_missing_links_and_stale_counts(tmp_path:
 
 
 def test_validate_documentation_checks_artifact_manifest_count_mentions(tmp_path: Path) -> None:
-    create_docs(tmp_path, test_count=147)
+    create_docs(tmp_path, test_count=160)
     manifest_path = tmp_path / "artifacts" / "report_assets" / "artifact_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
@@ -150,13 +178,13 @@ def test_validate_documentation_checks_artifact_manifest_count_mentions(tmp_path
         encoding="utf-8",
     )
 
-    report = doc_validator.validate_documentation(tmp_path, expected_tests=147, check_artifacts=True)
+    report = doc_validator.validate_documentation(tmp_path, expected_tests=160, check_artifacts=True)
 
     assert report["ok"] is True
 
 
 def test_validate_documentation_rejects_stale_artifact_manifest_count(tmp_path: Path) -> None:
-    create_docs(tmp_path, test_count=147)
+    create_docs(tmp_path, test_count=160)
     manifest_path = tmp_path / "artifacts" / "report_assets" / "artifact_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps({"artifacts": [{"path": "a"}, {"path": "b"}]}), encoding="utf-8")
@@ -171,7 +199,7 @@ def test_validate_documentation_rejects_stale_artifact_manifest_count(tmp_path: 
         encoding="utf-8",
     )
 
-    report = doc_validator.validate_documentation(tmp_path, expected_tests=147, check_artifacts=True)
+    report = doc_validator.validate_documentation(tmp_path, expected_tests=160, check_artifacts=True)
 
     assert report["ok"] is False
     failed_ids = set(report["summary"]["failed_ids"])

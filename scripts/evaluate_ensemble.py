@@ -23,11 +23,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a pure-RL checkpoint ensemble.")
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--ensemble-checkpoint", dest="ensemble_checkpoints", action="append", type=Path, default=[])
+    parser.add_argument("--model-weight", dest="model_weights", action="append", type=float, default=[])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--games", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-steps", type=int, default=600)
+    parser.add_argument("--decision-actions", choices=["open", "full"], default="full")
     parser.add_argument("--inference-flips", action="store_true", default=True)
     parser.add_argument("--no-inference-flips", dest="inference_flips", action="store_false")
     parser.add_argument("--inference-ensemble", choices=["logits", "probs"], default="probs")
@@ -36,9 +38,11 @@ def main() -> None:
 
     checkpoints = [args.checkpoint, *args.ensemble_checkpoints]
     trainers = [load_eval_trainer(path, args) for path in checkpoints]
+    model_weights = normalize_model_weights(args.model_weights, expected=len(trainers))
     started_at = time.time()
     metrics = evaluate_ensemble(
         trainers=trainers,
+        model_weights=model_weights,
         games=args.games,
         seed=args.seed,
         batch_size=args.batch_size,
@@ -48,6 +52,8 @@ def main() -> None:
         "device": str(trainers[0].device),
         "inference_augment_flips": args.inference_flips,
         "inference_ensemble": args.inference_ensemble,
+        "decision_actions": args.decision_actions,
+        "model_weights": model_weights,
         "solver_decision": False,
         "elapsed_seconds": time.time() - started_at,
         **metrics,
@@ -65,7 +71,7 @@ def load_eval_trainer(path: Path, args: argparse.Namespace) -> MinesweeperTraine
     trainer.config.mines = 99
     trainer.config.safe_radius = 1
     trainer.config.max_steps = args.max_steps
-    trainer.config.decision_actions = "full"
+    trainer.config.decision_actions = args.decision_actions
     trainer.config.inference_augment_flips = args.inference_flips
     trainer.config.inference_ensemble = args.inference_ensemble
     trainer.config.risk_head_weight = 0.0
@@ -75,6 +81,7 @@ def load_eval_trainer(path: Path, args: argparse.Namespace) -> MinesweeperTraine
 
 def evaluate_ensemble(
     trainers: list[MinesweeperTrainer],
+    model_weights: list[float] | None,
     games: int,
     seed: int,
     batch_size: int,
@@ -82,6 +89,7 @@ def evaluate_ensemble(
     if not trainers:
         raise ValueError("at least one trainer is required")
     base = trainers[0]
+    weights = normalize_model_weights(model_weights or [], expected=len(trainers))
     batch_size = max(1, int(batch_size))
     wins: list[bool] = []
     rewards: list[float] = []
@@ -121,12 +129,14 @@ def evaluate_ensemble(
             if not ready:
                 continue
 
-            scores = average_policy_scores(
-                trainers=trainers,
-                boards=np.stack(boards),
-                global_features_batch=np.stack(global_features),
-                action_masks=np.stack(action_masks),
-            )
+            with torch.inference_mode():
+                scores = average_policy_scores(
+                    trainers=trainers,
+                    model_weights=weights,
+                    boards=np.stack(boards),
+                    global_features_batch=np.stack(global_features),
+                    action_masks=np.stack(action_masks),
+                )
             action_indices = scores.argmax(dim=1).detach().cpu().numpy()
 
             for local_index, game_index in enumerate(ready):
@@ -160,21 +170,37 @@ def evaluate_ensemble(
 
 def average_policy_scores(
     trainers: list[MinesweeperTrainer],
+    model_weights: list[float] | None,
     boards: np.ndarray,
     global_features_batch: np.ndarray,
     action_masks: np.ndarray,
 ) -> torch.Tensor:
     combined = None
-    for trainer in trainers:
+    weights = normalize_model_weights(model_weights or [], expected=len(trainers))
+    for trainer, weight in zip(trainers, weights, strict=True):
         scores = trainer._predict_policy_scores_batch(
             boards=boards,
             global_features_batch=global_features_batch,
             action_masks=action_masks,
             use_flip_ensemble=bool(trainer.config.inference_augment_flips),
         )
-        combined = scores if combined is None else combined + scores
+        weighted_scores = scores * float(weight)
+        combined = weighted_scores if combined is None else combined + weighted_scores
     assert combined is not None
-    return combined / float(len(trainers))
+    return combined
+
+
+def normalize_model_weights(weights: list[float] | None, *, expected: int) -> list[float]:
+    if expected <= 0:
+        raise ValueError("at least one checkpoint is required")
+    if not weights:
+        return [1.0 / expected] * expected
+    if len(weights) != expected:
+        raise ValueError(f"model-weight count must match checkpoint count: {len(weights)} != {expected}")
+    array = np.asarray(weights, dtype=np.float64)
+    if not np.isfinite(array).all() or (array < 0.0).any() or float(array.sum()) <= 0.0:
+        raise ValueError("model weights must be finite, non-negative, and sum positive")
+    return (array / float(array.sum())).astype(float).tolist()
 
 
 def longest_streak(wins: list[bool]) -> int:

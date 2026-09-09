@@ -69,6 +69,7 @@ def create_claim_fixture(root: Path) -> Path:
     write_text(root / "README.md", "43.0% 40.40% 39.60% 495 完成局 952 完成局")
     write_text(root / "PROJECT_ONE_PAGER.md", "43.0% 40.40% 39.60% 495 完成局 952 完成局")
     write_text(root / "INTERVIEW_QA.md", "43.0% 40.40% 39.60% 495 完成局 952 完成局 不是稳定超过 40%")
+    write_text(root / "DATA_DEVELOPMENT_CASE.md", "43.0% 40.40% 39.60% 495 完成局 952 完成局 不是稳定超过 40%")
     write_text(root / "ABLATION_STUDY.md", "41.50% 43.0% 40.40% 39.60% 495 完成局 952 完成局")
     write_text(root / "PROJECT_COMPLETION_AUDIT.md", "41.50% 43.0% 40.40% 39.60% 495 完成局 952 完成局")
     write_text(root / "PROJECT_REPORT.md", "43.0% 40.40% 39.60% 495 个完成局 952 个完成局")

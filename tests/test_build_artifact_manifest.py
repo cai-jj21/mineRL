@@ -33,6 +33,7 @@ def create_manifest_fixture(tmp_path: Path) -> tuple[list[Path], dict[str, Path]
     desktop = tmp_path / "desktop.json"
     report_dir = tmp_path / "report"
     failure_md = tmp_path / "FAILURE_ANALYSIS.md"
+    warehouse_sql = tmp_path / "sql" / "warehouse_analysis.sql"
     streak_dir = tmp_path / "games"
 
     write_json(
@@ -92,6 +93,7 @@ def create_manifest_fixture(tmp_path: Path) -> tuple[list[Path], dict[str, Path]
         },
     )
     write_text(failure_md, "# Failure Analysis\n")
+    write_text(warehouse_sql, "-- SQL analysis fixture\n")
     write_json(streak_dir / "game_001.json", {"summary": {"won": True}})
     write_json(streak_dir / "game_002.json", {"summary": {"won": True}})
 
@@ -102,6 +104,7 @@ def create_manifest_fixture(tmp_path: Path) -> tuple[list[Path], dict[str, Path]
         desktop_summary=desktop,
         report_dir=report_dir,
         failure_analysis_md=failure_md,
+        warehouse_sql=warehouse_sql,
         streak_dir=streak_dir,
         streak_start=1,
         streak_end=2,
@@ -113,6 +116,7 @@ def create_manifest_fixture(tmp_path: Path) -> tuple[list[Path], dict[str, Path]
         "desktop": desktop,
         "report_dir": report_dir,
         "failure_md": failure_md,
+        "warehouse_sql": warehouse_sql,
     }
 
 
@@ -133,7 +137,7 @@ def test_build_manifest_records_hashes_and_headline_metrics(tmp_path: Path) -> N
 
     assert manifest["ok"] is True
     assert manifest["missing"] == []
-    assert len(manifest["artifacts"]) == 18
+    assert len(manifest["artifacts"]) == 19
     candidate_record = manifest["artifacts"][0]
     expected_hash = hashlib.sha256(refs["candidate"].read_bytes()).hexdigest()
     assert candidate_record["sha256"] == expected_hash
